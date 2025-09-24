@@ -28,12 +28,7 @@ from ..extras.packages import is_ray_available
 from ..hparams import get_infer_args, get_ray_args, get_train_args, read_args
 from ..model import load_model, load_tokenizer
 from .callbacks import LogCallback, PissaConvertCallback, ReporterCallback
-from .dpo import run_dpo
-from .kto import run_kto
 from .ppo import run_ppo
-from .pt import run_pt
-from .rm import run_rm
-from .sft import run_sft
 from .trainer_utils import get_ray_trainer, get_swanlab_callback
 
 
@@ -52,7 +47,14 @@ logger = logging.get_logger(__name__)
 def _training_function(config: dict[str, Any]) -> None:
     args = config.get("args")
     callbacks: list[Any] = config.get("callbacks")
-    model_args, data_args, training_args, finetuning_args, generating_args = get_train_args(args)
+    (
+        model_args,
+        data_args,
+        training_args,
+        finetuning_args,
+        generating_args,
+        pspo_args,
+    ) = get_train_args(args)
 
     callbacks.append(LogCallback())
     if finetuning_args.pissa_convert:
@@ -66,20 +68,18 @@ def _training_function(config: dict[str, Any]) -> None:
 
     callbacks.append(ReporterCallback(model_args, data_args, finetuning_args, generating_args))  # add to last
 
-    if finetuning_args.stage == "pt":
-        run_pt(model_args, data_args, training_args, finetuning_args, callbacks)
-    elif finetuning_args.stage == "sft":
-        run_sft(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
-    elif finetuning_args.stage == "rm":
-        run_rm(model_args, data_args, training_args, finetuning_args, callbacks)
-    elif finetuning_args.stage == "ppo":
-        run_ppo(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
-    elif finetuning_args.stage == "dpo":
-        run_dpo(model_args, data_args, training_args, finetuning_args, callbacks)
-    elif finetuning_args.stage == "kto":
-        run_kto(model_args, data_args, training_args, finetuning_args, callbacks)
-    else:
+    if finetuning_args.stage not in {"ppo", "pspo", "grpo"}:
         raise ValueError(f"Unknown task: {finetuning_args.stage}.")
+
+    run_ppo(
+        model_args,
+        data_args,
+        training_args,
+        finetuning_args,
+        generating_args,
+        pspo_args,
+        callbacks,
+    )
 
     if is_ray_available() and ray.is_initialized():
         return  # if ray is intialized it will destroy the process group on return
@@ -158,7 +158,7 @@ def export_model(args: Optional[dict[str, Any]] = None) -> None:
             safe_serialization=(not model_args.export_legacy_format),
         )
 
-    if finetuning_args.stage == "rm":
+    if finetuning_args.stage in {"ppo", "pspo", "grpo"}:
         if model_args.adapter_name_or_path is not None:
             vhead_path = model_args.adapter_name_or_path[-1]
         else:

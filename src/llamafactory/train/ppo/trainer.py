@@ -33,7 +33,7 @@ from transformers.trainer_pt_utils import remove_dummy_checkpoint
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
 from trl import PPOConfig, PPOTrainer
-from trl.core import PPODecorators, logprobs_from_logits
+from trl.core import PPODecorators, logprobs_from_logits, masked_whiten
 from trl.models.utils import unwrap_model_for_generation
 from typing_extensions import override
 
@@ -42,6 +42,7 @@ from ...extras.misc import AverageMeter, count_parameters, get_current_device, g
 from ..callbacks import FixValueHeadModelCallback, SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
 from .ppo_utils import dump_layernorm, get_rewards_from_server, replace_model, restore_layernorm
+from ..pspo import PSPOHelper
 
 
 if TYPE_CHECKING:
@@ -55,7 +56,7 @@ if TYPE_CHECKING:
     )
     from trl import AutoModelForCausalLMWithValueHead
 
-    from ...hparams import FinetuningArguments, GeneratingArguments, ModelArguments
+    from ...hparams import FinetuningArguments, GeneratingArguments, ModelArguments, PSPOArguments
 
 
 logger = logging.get_logger(__name__)
@@ -70,6 +71,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         training_args: "Seq2SeqTrainingArguments",
         finetuning_args: "FinetuningArguments",
         generating_args: "GeneratingArguments",
+        pspo_args: "PSPOArguments",
         callbacks: Optional[list["TrainerCallback"]],
         model: "AutoModelForCausalLMWithValueHead",
         reward_model: Optional["AutoModelForCausalLMWithValueHead"],
@@ -84,6 +86,9 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             raise NotImplementedError("PPOTrainer does not support eval dataset yet.")
 
         backward_batch_size = training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps
+        self.stage = finetuning_args.stage
+        self.is_grpo = self.stage == "grpo"
+
         ppo_config = PPOConfig(
             model_name=model_args.model_name_or_path,
             learning_rate=training_args.learning_rate,
@@ -102,6 +107,10 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             log_with=training_args.report_to[0] if training_args.report_to else None,
             project_kwargs={"logging_dir": training_args.logging_dir},
         )
+
+        if self.is_grpo:
+            ppo_config.vf_coef = 0.0
+            ppo_config.whiten_rewards = True
 
         # Add deepspeed config
         if training_args.deepspeed_plugin is not None:
@@ -140,6 +149,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         self.args = training_args
         self.model_args = model_args
         self.finetuning_args = finetuning_args
+        self.pspo_args = pspo_args
         self.reward_model = reward_model
         self.current_device = get_current_device()  # patch for deepspeed training
 
@@ -148,6 +158,20 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             eos_token_id=[self.tokenizer.eos_token_id] + self.tokenizer.additional_special_tokens_ids,
             **generating_args.to_dict(),
         )
+
+        if self.is_grpo and hasattr(self.model, "v_head"):
+            for param in self.model.v_head.parameters():
+                param.requires_grad = False
+
+        self.pspo_helper = PSPOHelper(self, self.pspo_args)
+        self.pspo_helper.maybe_enable_generation_kwargs(self.generation_config)
+        if self.pspo_helper.enabled:
+            logger.info_rank0(
+                "启用 PSPO：gamma=%s, shaping_mode=%s, altopt_every=%s",
+                self.pspo_args.gamma,
+                self.pspo_args.shaping_mode,
+                self.pspo_args.altopt_every,
+            )
 
         self.state = TrainerState()
         self.control = TrainerControl()
@@ -239,30 +263,43 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             # Get inputs
             self.model.eval()
             self.tokenizer.padding_side = "right"  # change padding side
-            queries, responses, rewards = [], [], []
+            queries, responses = [], []
+            token_rewards: list[torch.Tensor] = []
+            reward_summaries: list[float] = []
             for idx in range(0, self.config.batch_size, self.config.mini_batch_size):
                 mini_batch = {
                     "input_ids": batch["input_ids"][idx : idx + self.config.mini_batch_size],
                     "attention_mask": batch["attention_mask"][idx : idx + self.config.mini_batch_size],
                 }
                 mini_batch_queries, mini_batch_responses = self.get_inputs(mini_batch)
-                mini_batch_rewards = self.get_rewards(mini_batch_queries, mini_batch_responses)
+                mini_batch_token_rewards, mini_batch_reward_summaries = self.get_rewards(
+                    mini_batch_queries, mini_batch_responses
+                )
                 queries.extend(mini_batch_queries)
                 responses.extend(mini_batch_responses)
-                rewards.extend(mini_batch_rewards)
+                token_rewards.extend(mini_batch_token_rewards)
+                reward_summaries.extend(mini_batch_reward_summaries)
 
             # Run PPO step
             self.model.train()
-            stats = self.step(queries, responses, rewards)
+            stats = self.step(queries, responses, token_rewards)
+            if self.pspo_helper.enabled:
+                extra_stats = self.pspo_helper.optimize_if_needed(step)
+                for key, value in extra_stats.items():
+                    if isinstance(value, torch.Tensor):
+                        stats[key] = float(value.detach().cpu())
+                    else:
+                        stats[key] = value
             self.tokenizer.padding_side = "left"  # restore padding side
-            loss_meter.update(float(stats["ppo/loss/total"]), n=len(rewards))
-            reward_meter.update(torch.stack(rewards).mean().item(), n=len(rewards))
+            loss_meter.update(float(stats["ppo/loss/total"]), n=len(token_rewards))
+            if reward_summaries:
+                reward_meter.update(float(torch.tensor(reward_summaries).mean().item()), n=len(reward_summaries))
 
             if self.config.log_with is not None:
                 try:
                     batch["query"] = self.tokenizer.batch_decode(queries, skip_special_tokens=True)
                     batch["response"] = self.tokenizer.batch_decode(responses, skip_special_tokens=True)
-                    self.log_stats(stats, batch, rewards)
+                    self.log_stats(stats, batch, reward_summaries)
                 except Exception:
                     logger.warning_rank0("Failed to save stats due to unknown errors.")
 
@@ -385,7 +422,10 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         if self.finetuning_args.reward_model_type == "api":
             token_ids = [torch.cat((q, r), dim=-1).tolist() for q, r in zip(queries, responses)]
             messages = self.tokenizer.batch_decode(token_ids, skip_special_tokens=False)
-            return get_rewards_from_server(self.reward_model, messages)
+            api_rewards = get_rewards_from_server(self.reward_model, messages)
+            token_rewards = [torch.tensor([score], dtype=torch.float32) for score in api_rewards]
+            reward_summaries = [float(score) for score in api_rewards.tolist()]
+            return token_rewards, reward_summaries
 
         batch: dict[str, torch.Tensor] = self.prepare_model_inputs(queries, responses)
         unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
@@ -403,7 +443,18 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             replace_model(unwrapped_model, target="default")
 
         rewards = values.gather(dim=-1, index=(batch["attention_mask"].sum(dim=-1, keepdim=True) - 1))
-        return rewards.float().detach()  # use fp32 type
+        rewards = rewards.float().detach()
+
+        if not self.pspo_helper.enabled:
+            token_rewards = [rewards[i].view(1).cpu() for i in range(rewards.size(0))]
+            reward_summaries = [float(r.item()) for r in rewards.view(-1)]
+            return token_rewards, reward_summaries
+
+        policy_inputs = {key: tensor.to(self.current_device) for key, tensor in batch.items()}
+        shaped_rewards, reward_summaries = self.pspo_helper.shape_rewards(
+            queries, responses, rewards, policy_inputs
+        )
+        return shaped_rewards, reward_summaries
 
     @override
     @PPODecorators.empty_device_cache()
@@ -474,6 +525,32 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         )
 
     @override
+    def compute_advantages(
+        self,
+        values: "torch.FloatTensor",
+        rewards: "torch.FloatTensor",
+        mask: "torch.FloatTensor",
+    ):
+        if not self.is_grpo:
+            return super().compute_advantages(values, rewards, mask)
+
+        rewards = rewards * mask
+        mask = mask.to(rewards.device)
+        returns = torch.zeros_like(rewards)
+        running = torch.zeros(rewards.size(0), device=rewards.device, dtype=rewards.dtype)
+        for t in range(rewards.size(-1) - 1, -1, -1):
+            running = rewards[:, t] + self.config.gamma * running
+            returns[:, t] = running
+
+        if self.config.whiten_rewards:
+            returns = masked_whiten(returns, mask, shift_mean=False)
+
+        advantages = masked_whiten(returns, mask)
+        advantages = advantages.detach()
+        zeros = torch.zeros_like(returns)
+        return zeros, advantages, returns
+
+    @override
     def save_model(self, output_dir: Optional[str] = None) -> None:
         r"""Save model checkpoint.
 
@@ -501,3 +578,5 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         elif self.args.should_save:
             unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
             self._save(output_dir, state_dict=unwrapped_model.state_dict())
+        if self.pspo_helper.enabled:
+            self.pspo_helper.save_state(output_dir)

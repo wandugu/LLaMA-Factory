@@ -28,7 +28,7 @@ from .trainer import CustomPPOTrainer
 if TYPE_CHECKING:
     from transformers import Seq2SeqTrainingArguments, TrainerCallback
 
-    from ...hparams import DataArguments, FinetuningArguments, GeneratingArguments, ModelArguments
+    from ...hparams import DataArguments, FinetuningArguments, GeneratingArguments, ModelArguments, PSPOArguments
 
 
 def run_ppo(
@@ -37,12 +37,16 @@ def run_ppo(
     training_args: "Seq2SeqTrainingArguments",
     finetuning_args: "FinetuningArguments",
     generating_args: "GeneratingArguments",
+    pspo_args: "PSPOArguments",
     callbacks: Optional[list["TrainerCallback"]] = None,
 ):
+    stage = finetuning_args.stage
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
-    dataset_module = get_dataset(template, model_args, data_args, training_args, stage="ppo", **tokenizer_module)
+    dataset_module = get_dataset(
+        template, model_args, data_args, training_args, stage="ppo", **tokenizer_module
+    )
     model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train, add_valuehead=True)
 
     tokenizer.padding_side = "left"  # use left-padding in generation while using right-padding in training
@@ -52,12 +56,16 @@ def run_ppo(
     ref_model = create_ref_model(model_args, finetuning_args, add_valuehead=True)
     reward_model = create_reward_model(model, model_args, finetuning_args)
 
+    if stage == "pspo" and not pspo_args.enable:
+        pspo_args.enable = True
+
     # Initialize our Trainer
     ppo_trainer: CustomPPOTrainer = CustomPPOTrainer(
         model_args=model_args,
         training_args=training_args,
         finetuning_args=finetuning_args,
         generating_args=generating_args,
+        pspo_args=pspo_args,
         callbacks=callbacks,
         model=model,
         reward_model=reward_model,

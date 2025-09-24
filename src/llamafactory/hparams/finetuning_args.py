@@ -457,9 +457,9 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether or not to train model in purely bf16 precision (without AMP)."},
     )
-    stage: Literal["pt", "sft", "rm", "ppo", "dpo", "kto"] = field(
-        default="sft",
-        metadata={"help": "Which stage will be performed in training."},
+    stage: Literal["ppo", "pspo", "grpo"] = field(
+        default="pspo",
+        metadata={"help": "Which RL stage will be performed in training."},
     )
     finetuning_type: Literal["lora", "freeze", "full"] = field(
         default="lora",
@@ -528,23 +528,20 @@ class FinetuningArguments(
         self.additional_target: Optional[list[str]] = split_arg(self.additional_target)
         self.galore_target: list[str] = split_arg(self.galore_target)
         self.apollo_target: list[str] = split_arg(self.apollo_target)
-        self.use_ref_model = self.stage == "dpo" and self.pref_loss not in ["orpo", "simpo"]
+        self.use_ref_model = False
 
         assert self.finetuning_type in ["lora", "oft", "freeze", "full"], "Invalid fine-tuning method."
         assert self.ref_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
         assert self.reward_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
 
-        if self.stage == "ppo" and self.reward_model is None:
-            raise ValueError("`reward_model` is necessary for PPO training.")
+        if self.stage in ["ppo", "pspo", "grpo"] and self.reward_model is None:
+            raise ValueError("`reward_model` is necessary for RLHF training.")
 
-        if self.stage == "ppo" and self.reward_model_type == "lora" and self.finetuning_type != "lora":
-            raise ValueError("`reward_model_type` cannot be lora for Freeze/Full PPO training.")
+        if self.stage in ["ppo", "pspo", "grpo"] and self.reward_model_type == "lora" and self.finetuning_type != "lora":
+            raise ValueError("`reward_model_type` cannot be lora for Freeze/Full RLHF training.")
 
-        if self.stage == "ppo" and self.reward_model_type == "oft" and self.finetuning_type != "oft":
-            raise ValueError("`reward_model_type` cannot be oft for Freeze/Full PPO training.")
-
-        if self.stage == "dpo" and self.pref_loss != "sigmoid" and self.dpo_label_smoothing > 1e-6:
-            raise ValueError("`dpo_label_smoothing` is only valid for sigmoid loss function.")
+        if self.stage in ["ppo", "pspo", "grpo"] and self.reward_model_type == "oft" and self.finetuning_type != "oft":
+            raise ValueError("`reward_model_type` cannot be oft for Freeze/Full RLHF training.")
 
         if self.use_llama_pro and self.finetuning_type == "full":
             raise ValueError("`use_llama_pro` is only valid for Freeze or LoRA training.")
@@ -555,7 +552,7 @@ class FinetuningArguments(
         if int(self.use_galore) + int(self.use_apollo) + (self.use_badam) > 1:
             raise ValueError("Cannot use GaLore, APOLLO or BAdam together.")
 
-        if self.pissa_init and (self.stage in ["ppo", "kto"] or self.use_ref_model):
+        if self.pissa_init and self.stage in ["ppo", "pspo", "grpo"]:
             raise ValueError("Cannot use PiSSA for current training stage.")
 
         if self.finetuning_type != "lora":
