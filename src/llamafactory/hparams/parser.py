@@ -38,6 +38,7 @@ from .evaluation_args import EvaluationArguments
 from .finetuning_args import FinetuningArguments
 from .generating_args import GeneratingArguments
 from .model_args import ModelArguments
+from .pspo_args import PSPOArguments
 from .training_args import RayArguments, TrainingArguments
 
 
@@ -46,8 +47,22 @@ logger = logging.get_logger(__name__)
 check_dependencies()
 
 
-_TRAIN_ARGS = [ModelArguments, DataArguments, TrainingArguments, FinetuningArguments, GeneratingArguments]
-_TRAIN_CLS = tuple[ModelArguments, DataArguments, TrainingArguments, FinetuningArguments, GeneratingArguments]
+_TRAIN_ARGS = [
+    ModelArguments,
+    DataArguments,
+    TrainingArguments,
+    FinetuningArguments,
+    GeneratingArguments,
+    PSPOArguments,
+]
+_TRAIN_CLS = tuple[
+    ModelArguments,
+    DataArguments,
+    TrainingArguments,
+    FinetuningArguments,
+    GeneratingArguments,
+    PSPOArguments,
+]
 _INFER_ARGS = [ModelArguments, DataArguments, FinetuningArguments, GeneratingArguments]
 _INFER_CLS = tuple[ModelArguments, DataArguments, FinetuningArguments, GeneratingArguments]
 _EVAL_ARGS = [ModelArguments, DataArguments, EvaluationArguments, FinetuningArguments]
@@ -207,41 +222,36 @@ def get_ray_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> Ray
 
 
 def get_train_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _TRAIN_CLS:
-    model_args, data_args, training_args, finetuning_args, generating_args = _parse_train_args(args)
+    model_args, data_args, training_args, finetuning_args, generating_args, pspo_args = _parse_train_args(args)
 
     # Setup logging
     if training_args.should_log:
         _set_transformers_logging()
 
     # Check arguments
-    if finetuning_args.stage != "sft":
-        if training_args.predict_with_generate:
-            raise ValueError("`predict_with_generate` cannot be set as True except SFT.")
+    if finetuning_args.stage not in {"ppo", "pspo", "grpo"}:
+        raise ValueError("当前分支仅支持 PPO、PSPO 与 GRPO 训练阶段。")
 
-        if data_args.neat_packing:
-            raise ValueError("`neat_packing` cannot be set as True except SFT.")
+    if training_args.predict_with_generate:
+        raise ValueError("RL 阶段不支持 `predict_with_generate`。")
 
-        if data_args.train_on_prompt or data_args.mask_history:
-            raise ValueError("`train_on_prompt` or `mask_history` cannot be set as True except SFT.")
+    if data_args.neat_packing or data_args.train_on_prompt or data_args.mask_history:
+        raise ValueError("RL 阶段不支持 `neat_packing`、`train_on_prompt` 或 `mask_history`。")
 
-    if finetuning_args.stage == "sft" and training_args.do_predict and not training_args.predict_with_generate:
-        raise ValueError("Please enable `predict_with_generate` to save model predictions.")
+    if training_args.load_best_model_at_end:
+        raise ValueError("RL 阶段不支持 `load_best_model_at_end`。")
 
-    if finetuning_args.stage in ["rm", "ppo"] and training_args.load_best_model_at_end:
-        raise ValueError("RM and PPO stages do not support `load_best_model_at_end`.")
+    if not training_args.do_train:
+        raise ValueError("请开启 `do_train` 以运行 RL 训练流程。")
 
-    if finetuning_args.stage == "ppo":
-        if not training_args.do_train:
-            raise ValueError("PPO training does not support evaluation, use the SFT stage to evaluate models.")
+    if model_args.shift_attn:
+        raise ValueError("RL 训练与 S^2-Attn 不兼容。")
 
-        if model_args.shift_attn:
-            raise ValueError("PPO training is incompatible with S^2-Attn.")
+    if finetuning_args.reward_model_type == "lora" and model_args.use_unsloth:
+        raise ValueError("Unsloth 不支持 LoRA 形式的奖励模型。")
 
-        if finetuning_args.reward_model_type == "lora" and model_args.use_unsloth:
-            raise ValueError("Unsloth does not support lora reward model.")
-
-        if training_args.report_to and training_args.report_to[0] not in ["wandb", "tensorboard"]:
-            raise ValueError("PPO only accepts wandb or tensorboard logger.")
+    if training_args.report_to and training_args.report_to[0] not in ["wandb", "tensorboard"]:
+        raise ValueError("RL 训练仅支持 wandb 或 tensorboard 日志。")
 
     if training_args.parallel_mode == ParallelMode.NOT_DISTRIBUTED:
         raise ValueError("Please launch distributed training with `llamafactory-cli` or `torchrun`.")
@@ -341,9 +351,6 @@ def get_train_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _
     if (not training_args.do_train) and model_args.quantization_bit is not None:
         logger.warning_rank0("Evaluating model in 4/8-bit mode may cause lower scores.")
 
-    if (not training_args.do_train) and finetuning_args.stage == "dpo" and finetuning_args.ref_model is None:
-        logger.warning_rank0("Specify `ref_model` for computing rewards at evaluation.")
-
     # Post-process training arguments
     training_args.generation_max_length = training_args.generation_max_length or data_args.cutoff_len
     training_args.generation_num_beams = data_args.eval_num_beams or training_args.generation_num_beams
@@ -364,7 +371,7 @@ def get_train_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _
         logger.info_rank0("Set `ddp_find_unused_parameters` to False in DDP training since LoRA is enabled.")
         training_args.ddp_find_unused_parameters = False
 
-    if finetuning_args.stage in ["rm", "ppo"] and finetuning_args.finetuning_type in ["full", "freeze"]:
+    if finetuning_args.stage in ["ppo", "pspo", "grpo"] and finetuning_args.finetuning_type in ["full", "freeze"]:
         can_resume_from_checkpoint = False
         if training_args.resume_from_checkpoint is not None:
             logger.warning_rank0("Cannot resume from checkpoint in current stage.")
@@ -391,7 +398,7 @@ def get_train_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _
             logger.info_rank0("Change `output_dir` or use `overwrite_output_dir` to avoid.")
 
     if (
-        finetuning_args.stage in ["rm", "ppo"]
+        finetuning_args.stage in ["ppo", "pspo", "grpo"]
         and finetuning_args.finetuning_type == "lora"
         and training_args.resume_from_checkpoint is not None
     ):
@@ -408,7 +415,7 @@ def get_train_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _
     model_args.device_map = {"": get_current_device()}
     model_args.model_max_length = data_args.cutoff_len
     model_args.block_diag_attn = data_args.neat_packing
-    data_args.packing = data_args.packing if data_args.packing is not None else finetuning_args.stage == "pt"
+    data_args.packing = data_args.packing if data_args.packing is not None else False
 
     # Log on each process the small summary
     logger.info(
@@ -419,7 +426,7 @@ def get_train_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _
     )
     transformers.set_seed(training_args.seed)
 
-    return model_args, data_args, training_args, finetuning_args, generating_args
+    return model_args, data_args, training_args, finetuning_args, generating_args, pspo_args
 
 
 def get_infer_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _INFER_CLS:
@@ -430,9 +437,6 @@ def get_infer_args(args: Optional[Union[dict[str, Any], list[str]]] = None) -> _
 
     # Check arguments
     if model_args.infer_backend == "vllm":
-        if finetuning_args.stage != "sft":
-            raise ValueError("vLLM engine only supports auto-regressive models.")
-
         if model_args.quantization_bit is not None:
             raise ValueError("vLLM engine does not support bnb quantization (GPTQ and AWQ are supported).")
 
