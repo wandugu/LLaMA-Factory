@@ -220,6 +220,82 @@ class RLHFArguments:
         default=False,
         metadata={"help": "Whiten the rewards before compute advantages in PPO training."},
     )
+    rl_algo: Literal["ppo", "agpo"] = field(
+        default="ppo",
+        metadata={"help": "Select the reinforcement learning algorithm (ppo or agpo)."},
+    )
+    agpo_group_size: int = field(
+        default=8,
+        metadata={"help": "Number of sampled responses per prompt group in AGPO."},
+    )
+    agpo_eps_base: float = field(
+        default=0.2,
+        metadata={"help": "Base clipping epsilon for AGPO."},
+    )
+    agpo_eps_min: float = field(
+        default=0.05,
+        metadata={"help": "Minimum adaptive epsilon for AGPO."},
+    )
+    agpo_eps_max: float = field(
+        default=0.4,
+        metadata={"help": "Maximum adaptive epsilon for AGPO."},
+    )
+    agpo_alpha_var: float = field(
+        default=1.0,
+        metadata={"help": "Reward dispersion coefficient for adaptive epsilon."},
+    )
+    agpo_gamma_stepkl: float = field(
+        default=0.5,
+        metadata={"help": "Step KL coefficient for adaptive epsilon."},
+    )
+    agpo_zeta_skew: float = field(
+        default=0.0,
+        metadata={"help": "Reserved skewness coefficient for AGPO."},
+    )
+    agpo_use_robust_dispersion: Literal["std", "mad", "iqr"] = field(
+        default="std",
+        metadata={"help": "Dispersion metric for group-normalised advantages."},
+    )
+    agpo_tau_base: float = field(
+        default=1.0,
+        metadata={"help": "Base temperature for AGPO probe sampling."},
+    )
+    agpo_tau_min: float = field(
+        default=0.5,
+        metadata={"help": "Lower bound for adaptive temperature in AGPO."},
+    )
+    agpo_tau_max: float = field(
+        default=1.5,
+        metadata={"help": "Upper bound for adaptive temperature in AGPO."},
+    )
+    agpo_lambda_temp: float = field(
+        default=0.15,
+        metadata={"help": "Temperature scaling coefficient in AGPO."},
+    )
+    agpo_w_r: float = field(
+        default=1.0,
+        metadata={"help": "Weight for reward dispersion in AGPO uncertainty."},
+    )
+    agpo_w_e: float = field(
+        default=1.0,
+        metadata={"help": "Weight for vote entropy in AGPO uncertainty."},
+    )
+    agpo_w_k: float = field(
+        default=0.0,
+        metadata={"help": "Weight for reward skewness in AGPO uncertainty."},
+    )
+    agpo_beta_ref_kl: float = field(
+        default=0.03,
+        metadata={"help": "Coefficient for reference KL regularisation in AGPO."},
+    )
+    agpo_count_probe_tokens_in_budget: bool = field(
+        default=True,
+        metadata={"help": "Count probe tokens in the total token budget for AGPO."},
+    )
+    agpo_log_probe_metrics: bool = field(
+        default=True,
+        metadata={"help": "Log probe stage statistics in AGPO."},
+    )
     ref_model: Optional[str] = field(
         default=None,
         metadata={"help": "Path to the reference model used for the PPO or DPO training."},

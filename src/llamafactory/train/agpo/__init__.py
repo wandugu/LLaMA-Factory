@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .workflow import run_pt
+from .workflow import run_agpo
 
-
-__all__ = ["run_pt"]
+__all__ = ["run_agpo"]

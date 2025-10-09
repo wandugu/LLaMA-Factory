@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import shutil
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
@@ -22,18 +21,13 @@ from transformers import EarlyStoppingCallback, PreTrainedModel
 
 from ..data import get_template_and_fix_tokenizer
 from ..extras import logging
-from ..extras.constants import V_HEAD_SAFE_WEIGHTS_NAME, V_HEAD_WEIGHTS_NAME
 from ..extras.misc import infer_optim_dtype
 from ..extras.packages import is_ray_available
 from ..hparams import get_infer_args, get_ray_args, get_train_args, read_args
 from ..model import load_model, load_tokenizer
 from .callbacks import LogCallback, PissaConvertCallback, ReporterCallback
-from .dpo import run_dpo
-from .kto import run_kto
+from .agpo import run_agpo
 from .ppo import run_ppo
-from .pt import run_pt
-from .rm import run_rm
-from .sft import run_sft
 from .trainer_utils import get_ray_trainer, get_swanlab_callback
 
 
@@ -66,18 +60,11 @@ def _training_function(config: dict[str, Any]) -> None:
 
     callbacks.append(ReporterCallback(model_args, data_args, finetuning_args, generating_args))  # add to last
 
-    if finetuning_args.stage == "pt":
-        run_pt(model_args, data_args, training_args, finetuning_args, callbacks)
-    elif finetuning_args.stage == "sft":
-        run_sft(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
-    elif finetuning_args.stage == "rm":
-        run_rm(model_args, data_args, training_args, finetuning_args, callbacks)
-    elif finetuning_args.stage == "ppo":
-        run_ppo(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
-    elif finetuning_args.stage == "dpo":
-        run_dpo(model_args, data_args, training_args, finetuning_args, callbacks)
-    elif finetuning_args.stage == "kto":
-        run_kto(model_args, data_args, training_args, finetuning_args, callbacks)
+    if finetuning_args.stage == "ppo":
+        if finetuning_args.rl_algo == "agpo":
+            run_agpo(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
+        else:
+            run_ppo(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
     else:
         raise ValueError(f"Unknown task: {finetuning_args.stage}.")
 
@@ -157,25 +144,6 @@ def export_model(args: Optional[dict[str, Any]] = None) -> None:
             max_shard_size=f"{model_args.export_size}GB",
             safe_serialization=(not model_args.export_legacy_format),
         )
-
-    if finetuning_args.stage == "rm":
-        if model_args.adapter_name_or_path is not None:
-            vhead_path = model_args.adapter_name_or_path[-1]
-        else:
-            vhead_path = model_args.model_name_or_path
-
-        if os.path.exists(os.path.join(vhead_path, V_HEAD_SAFE_WEIGHTS_NAME)):
-            shutil.copy(
-                os.path.join(vhead_path, V_HEAD_SAFE_WEIGHTS_NAME),
-                os.path.join(model_args.export_dir, V_HEAD_SAFE_WEIGHTS_NAME),
-            )
-            logger.info_rank0(f"Copied valuehead to {model_args.export_dir}.")
-        elif os.path.exists(os.path.join(vhead_path, V_HEAD_WEIGHTS_NAME)):
-            shutil.copy(
-                os.path.join(vhead_path, V_HEAD_WEIGHTS_NAME),
-                os.path.join(model_args.export_dir, V_HEAD_WEIGHTS_NAME),
-            )
-            logger.info_rank0(f"Copied valuehead to {model_args.export_dir}.")
 
     try:
         tokenizer.padding_side = "left"  # restore padding side
