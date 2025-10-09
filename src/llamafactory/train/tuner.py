@@ -28,6 +28,7 @@ from ..extras.packages import is_ray_available
 from ..hparams import get_infer_args, get_ray_args, get_train_args, read_args
 from ..model import load_model, load_tokenizer
 from .callbacks import LogCallback, PissaConvertCallback, ReporterCallback
+from .agpo import run_agpo
 from .dpo import run_dpo
 from .kto import run_kto
 from .ppo import run_ppo
@@ -73,7 +74,10 @@ def _training_function(config: dict[str, Any]) -> None:
     elif finetuning_args.stage == "rm":
         run_rm(model_args, data_args, training_args, finetuning_args, callbacks)
     elif finetuning_args.stage == "ppo":
-        run_ppo(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
+        if finetuning_args.rl_algo == "agpo":
+            run_agpo(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
+        else:
+            run_ppo(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
     elif finetuning_args.stage == "dpo":
         run_dpo(model_args, data_args, training_args, finetuning_args, callbacks)
     elif finetuning_args.stage == "kto":
