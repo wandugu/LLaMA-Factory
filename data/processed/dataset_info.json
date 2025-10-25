@@ -1,0 +1,7 @@
+{
+  "maven_sft": {
+    "file_name": "maven_sft.jsonl",
+    "formatting": "alpaca",
+    "columns": { "instruction": "input", "output": "output" }
+  }
+}

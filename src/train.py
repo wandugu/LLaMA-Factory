@@ -13,10 +13,10 @@
 # limitations under the License.
 
 from llamafactory.train.tuner import run_exp
-
+import sys
 
 def main():
-    run_exp()
+    run_exp(args=sys.argv[1:])
 
 
 def _mp_fn(index):

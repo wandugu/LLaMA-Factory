@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CONFIG_PATH="${ROOT_DIR}/configs/pretrain_maven.yaml"
 
+echo "$CONFIG_PATH"; test -f "$CONFIG_PATH" && head -n 5 "$CONFIG_PATH"
+
+
 cd "${ROOT_DIR}"
 
 if [ ! -f "data/processed/maven_sft.jsonl" ]; then
@@ -16,8 +19,9 @@ if [ ! -f "requirements.txt" ]; then
   exit 1
 fi
 
-python -m pip install --upgrade pip >/dev/null
-python -m pip install -r requirements.txt
+# python -m pip install --upgrade pip >/dev/null
+# python -m pip install -r requirements.txt
 
 echo "[INFO] 启动 LlamaFactory 预训练"
-python -m src.train --config "${CONFIG_PATH}"
+llamafactory-cli train "${CONFIG_PATH}"
+

@@ -1,30 +1,37 @@
 {
   "event.jsonl": {
     "name": "event.jsonl",
-    "num_records": 5,
-    "num_docs": 3
+    "num_records": 206627,
+    "num_docs": 4480
   },
   "traj.jsonl": {
     "name": "traj.jsonl",
-    "num_records": 3,
-    "avg_traj_len": 2.3333333333333335,
-    "label_distribution": {
-      "expert": 1,
-      "candidate": 1,
-      "negative": 1
-    }
+    "num_records": 0,
+    "label_distribution": {}
   },
   "pairs.jsonl": {
     "name": "pairs.jsonl",
-    "num_records": 1,
-    "num_unique_ids": 2
+    "num_records": 0,
+    "num_unique_ids": 0
   },
   "maven_sft.jsonl": {
     "name": "maven_sft.jsonl",
-    "num_records": 5
+    "num_records": 206627
+  },
+  "maven_sft_test.jsonl": {
+    "name": "maven_sft_test.jsonl",
+    "num_records": 115405
+  },
+  "maven_sft_train.jsonl": {
+    "name": "maven_sft_train.jsonl",
+    "num_records": 73496
+  },
+  "maven_sft_valid.jsonl": {
+    "name": "maven_sft_valid.jsonl",
+    "num_records": 17726
   },
   "rl_prompts.jsonl": {
     "name": "rl_prompts.jsonl",
-    "num_records": 4
+    "num_records": 0
   }
 }

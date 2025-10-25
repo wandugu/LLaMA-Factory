@@ -1,10 +1,5 @@
 {
   "name": "traj.jsonl",
-  "num_records": 3,
-  "avg_traj_len": 2.3333333333333335,
-  "label_distribution": {
-    "expert": 1,
-    "candidate": 1,
-    "negative": 1
-  }
+  "num_records": 0,
+  "label_distribution": {}
 }
