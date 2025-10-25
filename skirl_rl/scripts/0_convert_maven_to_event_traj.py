@@ -22,7 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from tqdm import tqdm
@@ -623,33 +623,228 @@ def build_preference_pairs(
 # =============================
 
 
-def format_arguments(arguments: List[EventArgument]) -> str:
+@dataclass
+class MavenDocContext:
+    sentences: List[str] = field(default_factory=list)
+    event_sent_ids: Dict[str, Optional[int]] = field(default_factory=dict)
+    triggers_by_text: Dict[str, List[Optional[int]]] = field(default_factory=dict)
+
+
+def _extract_sentence_text(entry: object) -> str:
+    if isinstance(entry, dict):
+        sentence = entry.get("sentence") if isinstance(entry.get("sentence"), str) else None
+        if sentence:
+            return sentence.strip()
+        tokens = entry.get("tokens")
+        if isinstance(tokens, list):
+            token_strs = [tok for tok in tokens if isinstance(tok, str)]
+            if token_strs:
+                return " ".join(token_strs).strip()
+    elif isinstance(entry, str):
+        return entry.strip()
+    return ""
+
+
+def _iter_source_documents(src_dir: Path) -> Iterable[Tuple[str, Dict[str, object]]]:
+    split_files = {name: src_dir / f"{name}.jsonl" for name in ("train", "valid", "test")}
+    has_jsonl = any(path.exists() for path in split_files.values())
+    if has_jsonl:
+        for split_name, jsonl_path in split_files.items():
+            if not jsonl_path.exists():
+                continue
+            with jsonl_path.open("r", encoding="utf-8") as f:
+                for line_idx, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError as exc:  # noqa: PERF203
+                        LOGGER.warning("跳过 %s 第 %d 行：%s", jsonl_path.name, line_idx, exc)
+                        continue
+                    doc_id = data.get("id") or f"{split_name}_{line_idx:06d}"
+                    yield doc_id, data
+    else:
+        for json_path in sorted(src_dir.glob("*.json")):
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:  # noqa: PERF203
+                LOGGER.warning("解析 %s 失败：%s", json_path.name, exc)
+                continue
+            doc_id = data.get("id") or json_path.stem
+            yield doc_id, data
+
+
+def build_doc_context_index(src_dir: Path, target_doc_ids: Set[str]) -> Dict[str, MavenDocContext]:
+    contexts: Dict[str, MavenDocContext] = {}
+    if not target_doc_ids:
+        return contexts
+    remaining = set(target_doc_ids)
+    for doc_id, data in _iter_source_documents(src_dir):
+        if doc_id not in remaining:
+            continue
+        content = data.get("content") or []
+        sentences: List[str] = []
+        if isinstance(content, list):
+            for entry in content:
+                sentences.append(_extract_sentence_text(entry))
+        event_sent_ids: Dict[str, Optional[int]] = {}
+        triggers_by_text: Dict[str, List[Optional[int]]] = defaultdict(list)
+        events = data.get("events") or []
+        if not events and data.get("candidates"):
+            events = data.get("candidates", [])
+        for idx, raw_event in enumerate(events):
+            event_id = raw_event.get("id") or f"{doc_id}_event"
+            mentions = raw_event.get("mention") or raw_event.get("mentions") or []
+            if isinstance(mentions, dict):
+                mentions = [mentions]
+            sent_id: Optional[int] = None
+            trigger_word: Optional[str] = None
+            for mention in mentions:
+                if trigger_word is None:
+                    trigger_word = (
+                        mention.get("trigger_word")
+                        or mention.get("text")
+                        or mention.get("trigger")
+                    )
+                candidate = mention.get("sent_id")
+                if isinstance(candidate, int):
+                    sent_id = candidate
+                    break
+            trigger = raw_event.get("trigger")
+            if trigger_word is None and isinstance(trigger, dict):
+                trigger_word = trigger.get("text")
+            if isinstance(trigger, dict) and sent_id is None:
+                candidate = trigger.get("sent_id")
+                if isinstance(candidate, int):
+                    sent_id = candidate
+            trigger_word = (trigger_word or "").strip()
+            event_sent_ids[event_id] = sent_id
+            if trigger_word:
+                triggers_by_text[trigger_word.lower()].append(sent_id)
+        contexts[doc_id] = MavenDocContext(
+            sentences=sentences,
+            event_sent_ids=event_sent_ids,
+            triggers_by_text={k: list(v) for k, v in triggers_by_text.items()},
+        )
+        remaining.discard(doc_id)
+        if not remaining:
+            break
+    if remaining:
+        LOGGER.warning("部分文档缺少上下文信息：%s", ", ".join(sorted(remaining)[:5]))
+    return contexts
+
+
+def format_arguments(arguments: List[EventArgument]) -> List[str]:
+    if not arguments:
+        return ["- None (no arguments)"]
     lines = []
     for arg in arguments:
-        lines.append(f"- {arg.role}: {arg.entity_id} span={arg.span}")
-    return "\n".join(lines) if lines else "- None"
+        span = f"[{arg.span[0]},{arg.span[1]}]"
+        lines.append(f"- {arg.role}: {arg.entity_id} span={span}")
+    return lines
 
 
-def build_sft_samples(events: List[EventEntry]) -> Tuple[List[SFTSample], Dict[str, List[SFTSample]]]:
+def resolve_sent_id(event: EventEntry, doc_ctx: Optional[MavenDocContext]) -> int:
+    if doc_ctx is None or not doc_ctx.sentences:
+        return 0
+    sent_id = doc_ctx.event_sent_ids.get(event.event_id)
+    if sent_id is None:
+        trigger_text = event.trigger.text.strip().lower()
+        if trigger_text and trigger_text in doc_ctx.triggers_by_text:
+            for candidate in doc_ctx.triggers_by_text[trigger_text]:
+                if isinstance(candidate, int):
+                    sent_id = candidate
+                    break
+    if sent_id is None:
+        sent_id = 0
+    return max(0, min(sent_id, max(len(doc_ctx.sentences) - 1, 0)))
+
+
+def build_context_window(
+    event: EventEntry,
+    doc_ctx: Optional[MavenDocContext],
+    window: int,
+) -> Tuple[str, int]:
+    if doc_ctx is None or not doc_ctx.sentences:
+        fallback = event.trigger.text.strip() or "UNKNOWN CONTEXT"
+        return fallback, len(fallback.split())
+    sent_id = resolve_sent_id(event, doc_ctx)
+    sentences = doc_ctx.sentences
+    start = max(sent_id - window, 0)
+    end = min(sent_id + window + 1, len(sentences))
+    context_sentences = [sentences[idx].strip() for idx in range(start, end) if sentences[idx].strip()]
+    if not context_sentences and sentences:
+        primary = sentences[sent_id].strip()
+        if primary:
+            context_sentences = [primary]
+    if not context_sentences:
+        context_sentences = [
+            sent.strip() for sent in sentences if isinstance(sent, str) and sent.strip()
+        ]
+    if not context_sentences:
+        context_sentences = [event.trigger.text.strip() or "UNKNOWN CONTEXT"]
+    context = " ".join(context_sentences).strip()
+    token_count = len(context.split())
+    return context, token_count
+
+
+def validate_sft_sample(prompt: str, response: str) -> None:
+    required_sections = ["[DOC]", "[CONTEXT]", "[EVENT]", "[TRIGGER]", "[ARGUMENTS]", "[TIME]"]
+    for section in required_sections:
+        assert section in prompt, f"prompt 缺少 {section} 段落"
+    assert "[ARGUMENTS]\n" in prompt, "prompt 缺少论元列表"
+    json.loads(response)
+
+
+def build_sft_samples(
+    events: List[EventEntry],
+    context_index: Dict[str, MavenDocContext],
+    window: int = 1,
+) -> Tuple[List[SFTSample], Dict[str, List[SFTSample]]]:
     samples: List[SFTSample] = []
     grouped: Dict[str, List[SFTSample]] = defaultdict(list)
-    for event in events:
-        prompt = (
-            f"[DOC] {event.doc_id}\n"
-            f"[EVENT] {event.event_id}\n"
-            f"[TRIGGER] {event.trigger.text} ({event.trigger.type})\n"
-            "[ARGUMENTS]\n"
-            f"{format_arguments(event.arguments)}\n"
-            f"[TIME] {event.time.value if event.time else 'N/A'}\n"
-        )
-        agent_roles = [arg.entity_id for arg in event.arguments if arg.role.lower() == "agent"]
-        agent_text = "、".join(agent_roles) if agent_roles else "未知主体"
-        response = f"事件{event.event_id}描述了{event.trigger.text}，类型为{event.trigger.type}，主体为{agent_text}。"
+    total_tokens = 0
+    no_argument_count = 0
+    sorted_events = sorted(events, key=lambda item: (item.doc_id, item.event_id))
+    for event in sorted_events:
+        if not event.arguments:
+            no_argument_count += 1
+        doc_ctx = context_index.get(event.doc_id)
+        context_text, token_count = build_context_window(event, doc_ctx, window)
+        total_tokens += token_count
+        time_value = event.time.value if event.time else "UNKNOWN"
+        argument_lines = format_arguments(event.arguments)
+        prompt_lines = [
+            f"[DOC] {event.doc_id}",
+            f"[CONTEXT] {context_text}",
+            f"[EVENT] {event.event_id}",
+            f"[TRIGGER] {event.trigger.text} ({event.trigger.type})",
+            "[ARGUMENTS]",
+            *argument_lines,
+            f"[TIME] {time_value}",
+        ]
+        prompt = "\n".join(prompt_lines) + "\n"
+        response_payload = {
+            "trigger": event.trigger.text,
+            "type": event.trigger.type,
+            "args": {arg.role: arg.entity_id for arg in event.arguments},
+        }
+        response = json.dumps(response_payload, ensure_ascii=False)
+        validate_sft_sample(prompt, response)
         sample = SFTSample(prompt=prompt, response=response)
         samples.append(sample)
         if event.split:
             grouped[event.split].append(sample)
-    LOGGER.info("构造 SFT 样本 %d 条。", len(samples))
+    num_samples = len(samples)
+    avg_tokens = (total_tokens / num_samples) if num_samples else 0.0
+    no_arg_ratio = (no_argument_count / num_samples) if num_samples else 0.0
+    LOGGER.info(
+        "构造 SFT 样本 %d 条。无论元比例：%.2f%%，平均上下文 token 数：%.2f",
+        num_samples,
+        no_arg_ratio * 100,
+        avg_tokens,
+    )
     if grouped:
         for split_name, split_samples in grouped.items():
             LOGGER.info("  - %s: %d 条", split_name, len(split_samples))
@@ -725,7 +920,9 @@ def main() -> None:
     traj_stats = write_jsonl(args.dst / "traj.jsonl", all_trajs)
     pair_stats = write_jsonl(args.dst / "pairs.jsonl", pairs)
 
-    sft_samples, sft_by_split = build_sft_samples(events)
+    doc_ids = {event.doc_id for event in events}
+    context_index = build_doc_context_index(args.src, doc_ids)
+    sft_samples, sft_by_split = build_sft_samples(events, context_index)
     sft_stats = write_jsonl(args.dst / "maven_sft.jsonl", sft_samples)
     sft_split_stats: List[DatasetStats] = []
     for split_name, split_samples in sorted(sft_by_split.items()):
