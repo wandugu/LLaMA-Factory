@@ -1,0 +1,8 @@
+{
+  "name": "maven_sft.jsonl",
+  "num_records": 4,
+  "fields": [
+    "prompt",
+    "response"
+  ]
+}

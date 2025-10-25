@@ -1,0 +1,9 @@
+{
+  "name": "rl_prompts.jsonl",
+  "num_records": 3,
+  "fields": [
+    "prompt",
+    "response",
+    "trajectory_id"
+  ]
+}

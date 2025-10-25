@@ -36,3 +36,9 @@ av
 librosa
 # yanked
 propcache!=0.4.0
+
+numpy
+scipy
+networkx
+pydantic
+einops

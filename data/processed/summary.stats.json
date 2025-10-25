@@ -1,0 +1,38 @@
+{
+  "event": {
+    "name": "event.jsonl",
+    "num_records": 4,
+    "num_docs": 2
+  },
+  "traj": {
+    "name": "traj.jsonl",
+    "num_records": 3,
+    "label_distribution": {
+      "expert": 1,
+      "candidate": 1,
+      "negative": 1
+    }
+  },
+  "pairs": {
+    "name": "pairs.jsonl",
+    "num_records": 2,
+    "num_unique_ids": 3
+  },
+  "sft": {
+    "name": "maven_sft.jsonl",
+    "num_records": 4,
+    "fields": [
+      "prompt",
+      "response"
+    ]
+  },
+  "rl": {
+    "name": "rl_prompts.jsonl",
+    "num_records": 3,
+    "fields": [
+      "prompt",
+      "response",
+      "trajectory_id"
+    ]
+  }
+}

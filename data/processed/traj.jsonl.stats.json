@@ -1,0 +1,9 @@
+{
+  "name": "traj.jsonl",
+  "num_records": 3,
+  "label_distribution": {
+    "expert": 1,
+    "candidate": 1,
+    "negative": 1
+  }
+}

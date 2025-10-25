@@ -1,0 +1,2 @@
+{"better": "traj_P001_201403", "worse": "traj_P044_201403", "reason": "more complete EXECUTE→CASHOUT chain"}
+{"better": "traj_P044_201403", "worse": "traj_P099_201404", "reason": "contains EXECUTE stage"}
