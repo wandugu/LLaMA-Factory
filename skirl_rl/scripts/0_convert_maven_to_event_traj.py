@@ -302,17 +302,46 @@ def extract_trigger_from_mentions(
     return trigger_text, span
 
 
+EVENT_TYPE_CANDIDATE_KEYS = (
+    "type",
+    "event_type",
+    "event_subtype",
+    "subtype",
+    "label",
+)
+
+
+def resolve_event_type(event: Dict[str, object]) -> str:
+    for key in EVENT_TYPE_CANDIDATE_KEYS:
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    type_id = event.get("type_id")
+    if isinstance(type_id, str) and type_id.strip():
+        return type_id.strip()
+    if isinstance(type_id, int):
+        return str(type_id)
+    mentions = event.get("mention") or event.get("mentions") or []
+    if isinstance(mentions, dict):
+        mentions = [mentions]
+    for mention in mentions:
+        value = mention.get("type")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "Unknown"
+
+
 def parse_event(
     doc_id: str,
     event: Dict[str, object],
-    skeleton_map: Dict[str, List[str] | str],
+    skeleton_map: Dict[str, object],
     cameo_map: Dict[str, str],
     fallback_date: str,
     doc_content: Optional[List[Dict[str, object]]] = None,
     split: Optional[str] = None,
 ) -> Optional[EventEntry]:
     trigger = event.get("trigger") or {}
-    trigger_type = event.get("type", "Unknown")
+    trigger_type = resolve_event_type(event)
     using_new_schema = "trigger" not in event or not trigger
 
     if using_new_schema:
@@ -362,11 +391,7 @@ def parse_event(
         subevent=[EventRelation(**rel) for rel in relations_dict.get("subevent", [])],
     )
 
-    skeleton = skeleton_map.get(trigger_type) or []
-    if isinstance(skeleton, str):
-        skeleton_hits = [skeleton]
-    else:
-        skeleton_hits = list(skeleton)
+    skeleton_hits = resolve_skeleton_hits(trigger_type, skeleton_map)
     skeleton_type = skeleton_hits[0] if skeleton_hits else "UNKNOWN"
     mapping = {
         "cameo": cameo_map.get(trigger_type, "000"),
@@ -519,6 +544,208 @@ AGENT_ROLE_KEYWORDS = {
 }
 
 
+SKELETON_STAGE_ORDER = ["PREP", "PROBE", "EXECUTE", "CASHOUT"]
+PREP_KEYWORDS = {
+    "plan",
+    "prepare",
+    "gather",
+    "meet",
+    "statement",
+    "warn",
+    "warning",
+    "know",
+    "intel",
+    "intelligence",
+    "discuss",
+    "train",
+    "process_start",
+    "mobilize",
+    "mobilise",
+}
+PROBE_KEYWORDS = {
+    "probe",
+    "observe",
+    "monitor",
+    "investigate",
+    "analyse",
+    "analyze",
+    "assess",
+    "inspect",
+    "review",
+    "survey",
+    "recon",
+    "scout",
+    "interrogate",
+    "warning",
+    "statement",
+    "process_start",
+    "negotiat",
+}
+EXECUTE_KEYWORDS = {
+    "attack",
+    "hostile",
+    "strike",
+    "bomb",
+    "kill",
+    "killing",
+    "kidnap",
+    "shoot",
+    "raid",
+    "explode",
+    "explosion",
+    "execute",
+    "combat",
+    "military",
+    "operation",
+    "detain",
+    "arrest",
+    "arriv",
+    "threat",
+    "destroy",
+    "damage",
+    "riot",
+    "protest",
+    "conflict",
+    "catastrophe",
+    "violence",
+}
+CASHOUT_KEYWORDS = {
+    "loot",
+    "cashout",
+    "withdraw",
+    "escape",
+    "ransom",
+    "benefit",
+    "profit",
+    "gain",
+    "sell",
+    "launder",
+    "transport",
+    "transfer",
+    "process_end",
+    "aftermath",
+}
+
+STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "of",
+    "and",
+    "or",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "by",
+    "from",
+    "at",
+    "as",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "has",
+    "have",
+    "had",
+    "that",
+    "this",
+    "these",
+    "those",
+}
+
+
+def infer_skeleton_from_type(event_type: str) -> List[str]:
+    event_type_lower = (event_type or "").lower()
+    hits: List[str] = []
+    if any(keyword in event_type_lower for keyword in EXECUTE_KEYWORDS):
+        hits.append("EXECUTE")
+    if any(keyword in event_type_lower for keyword in CASHOUT_KEYWORDS):
+        hits.append("CASHOUT")
+    if any(keyword in event_type_lower for keyword in PROBE_KEYWORDS):
+        hits.insert(0, "PROBE")
+    if any(keyword in event_type_lower for keyword in PREP_KEYWORDS):
+        if "PROBE" not in hits:
+            hits.insert(0, "PROBE")
+        if "PREP" not in hits:
+            hits.insert(0, "PREP")
+    if not hits:
+        hits = ["PREP"]
+    ordered_hits: List[str] = []
+    for stage in SKELETON_STAGE_ORDER:
+        if stage in hits and stage not in ordered_hits:
+            ordered_hits.append(stage)
+    return ordered_hits or ["PREP"]
+
+
+def resolve_skeleton_hits(event_type: str, skeleton_map: Dict[str, object]) -> List[str]:
+    raw_hits = skeleton_map.get(event_type)
+    hits: List[str] = []
+    if isinstance(raw_hits, str) and raw_hits.strip():
+        hits = [raw_hits.strip().upper()]
+    elif isinstance(raw_hits, list):
+        for item in raw_hits:
+            if isinstance(item, str) and item.strip():
+                hits.append(item.strip().upper())
+    if hits:
+        ordered: List[str] = []
+        for stage in SKELETON_STAGE_ORDER:
+            if stage in hits and stage not in ordered:
+                ordered.append(stage)
+        return ordered or hits
+    return infer_skeleton_from_type(event_type)
+
+
+def _merge_titlecase_tokens(tokens: List[str]) -> List[str]:
+    merged: List[str] = []
+    buffer: List[str] = []
+    for tok in tokens:
+        clean = tok.strip(".,;:'\"()[]{}")
+        if not clean:
+            if buffer:
+                merged.append(" ".join(buffer))
+                buffer = []
+            continue
+        first = clean[0]
+        if first.isupper() and clean.lower() not in STOPWORDS:
+            buffer.append(clean)
+        else:
+            if buffer:
+                merged.append(" ".join(buffer))
+                buffer = []
+    if buffer:
+        merged.append(" ".join(buffer))
+    return merged
+
+
+def infer_core_arguments(event: EventEntry, doc_ctx: Optional[MavenDocContext]) -> Dict[str, str]:
+    if doc_ctx is None:
+        return {"Trigger": event.trigger.text or event.trigger.type or "UNKNOWN"}
+    sent_id = resolve_sent_id(event, doc_ctx)
+    sentence = ""
+    tokens: List[str] = []
+    if 0 <= sent_id < len(doc_ctx.sentences):
+        sentence = doc_ctx.sentences[sent_id]
+    if 0 <= sent_id < len(doc_ctx.tokens):
+        tokens = doc_ctx.tokens[sent_id]
+    if not tokens and sentence:
+        tokens = [tok for tok in sentence.split() if tok]
+    candidates = _merge_titlecase_tokens(tokens)
+    arguments: Dict[str, str] = {}
+    if candidates:
+        arguments["Agent"] = candidates[0]
+        if len(candidates) > 1:
+            arguments["Target"] = candidates[1]
+    if not arguments and sentence:
+        snippet = sentence.strip()
+        arguments["Context"] = snippet[:120]
+    if not arguments:
+        arguments["Trigger"] = event.trigger.text or event.trigger.type or "UNKNOWN"
+    return arguments
+
+
 def _collect_agent_candidates(event: EventEntry) -> List[str]:
     candidates: List[str] = []
     for arg in event.arguments:
@@ -528,7 +755,11 @@ def _collect_agent_candidates(event: EventEntry) -> List[str]:
     return candidates
 
 
-def build_trajectories(events: List[EventEntry], skeleton_map: Dict[str, object]) -> Tuple[List[TrajectoryEntry], Dict[str, str]]:
+def build_trajectories(
+    events: List[EventEntry],
+    skeleton_map: Dict[str, object],
+    context_index: Optional[Dict[str, MavenDocContext]] = None,
+) -> Tuple[List[TrajectoryEntry], Dict[str, str]]:
     grouped: Dict[Tuple[str, str], List[Tuple[EventEntry, str]]] = defaultdict(list)
     for event in events:
         agent_ids = _collect_agent_candidates(event)
@@ -549,22 +780,28 @@ def build_trajectories(events: List[EventEntry], skeleton_map: Dict[str, object]
         prev_time: Optional[str] = None
         skeleton_seq: List[str] = []
         for event, _agent in ev_list:
-            roles = {arg.role: arg.entity_id for arg in event.arguments}
-            meta_nodes.update(roles.values())
-            step_skeleton = skeleton_map.get(event.trigger.type, [])
-            if isinstance(step_skeleton, str):
-                skeleton_hits = [step_skeleton]
+            doc_ctx = context_index.get(event.doc_id) if context_index else None
+            real_roles = {arg.role: arg.entity_id for arg in event.arguments}
+            roles = real_roles or infer_core_arguments(event, doc_ctx)
+            if real_roles:
+                meta_nodes.update(real_roles.values())
             else:
-                skeleton_hits = list(step_skeleton)
+                for value in roles.values():
+                    if isinstance(value, str) and len(value) > 80:
+                        meta_nodes.add(value[:80] + '…')
+                    else:
+                        meta_nodes.add(value)
+            skeleton_hits = resolve_skeleton_hits(event.trigger.type, skeleton_map)
             skeleton_seq.extend(skeleton_hits)
             delta = compute_delta_days(prev_time, event.time.value)
             prev_time = event.time.value
             text_ref = {"doc_id": event.doc_id, "span": event.trigger.span}
+            step_type = event.trigger.type or "Unknown"
             steps.append(
                 TrajectoryStep(
                     event_id=event.event_id,
                     time=event.time.value,
-                    type=event.trigger.type,
+                    type=step_type,
                     roles=roles,
                     delta_days_from_prev=delta,
                     text_refs=[text_ref],
@@ -572,7 +809,8 @@ def build_trajectories(events: List[EventEntry], skeleton_map: Dict[str, object]
                 )
             )
             for role, ent in roles.items():
-                if role.lower() in {"target", "place"}:
+                role_lower = role.lower()
+                if role_lower in {"target", "place", "location"}:
                     meta_edges.append([person_id, event.trigger.type, ent, event.time.value])
         if not steps:
             continue
@@ -650,23 +888,30 @@ def build_preference_pairs(
 @dataclass
 class MavenDocContext:
     sentences: List[str] = field(default_factory=list)
+    tokens: List[List[str]] = field(default_factory=list)
     event_sent_ids: Dict[str, Optional[int]] = field(default_factory=dict)
     triggers_by_text: Dict[str, List[Optional[int]]] = field(default_factory=dict)
 
 
-def _extract_sentence_text(entry: object) -> str:
+def _extract_sentence_text(entry: object) -> Tuple[str, List[str]]:
     if isinstance(entry, dict):
         sentence = entry.get("sentence") if isinstance(entry.get("sentence"), str) else None
         if sentence:
-            return sentence.strip()
+            text = sentence.strip()
+            tokens = [tok for tok in text.split() if tok]
+            return text, tokens
         tokens = entry.get("tokens")
         if isinstance(tokens, list):
             token_strs = [tok for tok in tokens if isinstance(tok, str)]
             if token_strs:
-                return " ".join(token_strs).strip()
+                text = " ".join(token_strs).strip()
+                clean_tokens = [tok for tok in token_strs if tok]
+                return text, clean_tokens
     elif isinstance(entry, str):
-        return entry.strip()
-    return ""
+        text = entry.strip()
+        tokens = [tok for tok in text.split() if tok]
+        return text, tokens
+    return "", []
 
 
 def _iter_source_documents(src_dir: Path) -> Iterable[Tuple[str, Dict[str, object]]]:
@@ -709,9 +954,18 @@ def build_doc_context_index(src_dir: Path, target_doc_ids: Set[str]) -> Dict[str
             continue
         content = data.get("content") or []
         sentences: List[str] = []
+        sentence_tokens: List[List[str]] = []
         if isinstance(content, list):
             for entry in content:
-                sentences.append(_extract_sentence_text(entry))
+                sent_text, sent_tokens = _extract_sentence_text(entry)
+                if not sent_text and sent_tokens:
+                    sent_text = " ".join(sent_tokens)
+                if sent_text:
+                    sentences.append(sent_text)
+                    if sent_tokens:
+                        sentence_tokens.append(sent_tokens)
+                    else:
+                        sentence_tokens.append([tok for tok in sent_text.split() if tok])
         event_sent_ids: Dict[str, Optional[int]] = {}
         triggers_by_text: Dict[str, List[Optional[int]]] = defaultdict(list)
         events = data.get("events") or []
@@ -748,6 +1002,7 @@ def build_doc_context_index(src_dir: Path, target_doc_ids: Set[str]) -> Dict[str
                 triggers_by_text[trigger_word.lower()].append(sent_id)
         contexts[doc_id] = MavenDocContext(
             sentences=sentences,
+            tokens=sentence_tokens,
             event_sent_ids=event_sent_ids,
             triggers_by_text={k: list(v) for k, v in triggers_by_text.items()},
         )
@@ -854,8 +1109,9 @@ def build_sft_samples(
         response_payload = {
             "trigger": event.trigger.text,
             "type": event.trigger.type,
-            "args": {arg.role: arg.entity_id for arg in event.arguments},
         }
+        if event.arguments:
+            response_payload["args"] = {arg.role: arg.entity_id for arg in event.arguments}
         response = json.dumps(response_payload, ensure_ascii=False)
         sample = SFTSample(
             instruction="根据上下文抽取事件的触发词、类型与论元。",
@@ -893,7 +1149,7 @@ def build_rl_prompts(trajectories: List[TrajectoryEntry]) -> List[RLPrompt]:
             prefix_lines = []
             for step in prefix:
                 roles_str = ", ".join(f"{k}:{v}" for k, v in step.roles.items())
-                skeleton_str = ",".join(step.skeleton_hits)
+                skeleton_str = ",".join(step.skeleton_hits) or "PREP"
                 prefix_lines.append(
                     f"* {step.time} {step.type} roles={{{roles_str}}} skeleton={skeleton_str}"
                 )
@@ -903,8 +1159,8 @@ def build_rl_prompts(trajectories: List[TrajectoryEntry]) -> List[RLPrompt]:
                 + "\n".join(prefix_lines)
                 + "\n请预测下一步骨架动作与核心论元。"
             )
-            skeleton_str = ",".join(next_step.skeleton_hits)
-            response = f"{next_step.type} | skeleton={skeleton_str}"
+            skeleton_str = ",".join(next_step.skeleton_hits) or "PREP"
+            response = f"{next_step.type or 'Unknown'} | skeleton={skeleton_str}"
             prompts.append(
                 RLPrompt(
                     prompt=prompt,
@@ -963,16 +1219,17 @@ def main() -> None:
         LOGGER.error("未生成任何事件，流程终止。")
         return
 
+    doc_ids = {event.doc_id for event in events}
+    context_index = build_doc_context_index(args.src, doc_ids)
+
     event_stats = write_jsonl(args.dst / "event.jsonl", events)
 
-    base_trajs, _ = build_trajectories(events, skeleton_map)
+    base_trajs, _ = build_trajectories(events, skeleton_map, context_index)
     extra_trajs, pairs = build_preference_pairs(base_trajs, random.Random(42))
     all_trajs = base_trajs + extra_trajs
     traj_stats = write_jsonl(args.dst / "traj.jsonl", all_trajs)
     pair_stats = write_jsonl(args.dst / "pairs.jsonl", pairs)
 
-    doc_ids = {event.doc_id for event in events}
-    context_index = build_doc_context_index(args.src, doc_ids)
     sft_samples, sft_by_split = build_sft_samples(events, context_index)
     sft_stats = write_jsonl(args.dst / "maven_sft.jsonl", sft_samples)
     sft_split_stats: List[DatasetStats] = []
