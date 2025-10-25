@@ -1,0 +1,40 @@
+{
+  "id": "doc_0001",
+  "title": "维和部队与地方官员会面",
+  "content": "2014年3月1日，维和部队指挥官在巴士拉会见当地安全委员会代表，讨论边境安全。随后，示威者聚集在广场，发动抗议。",
+  "publish_time": "2014-03-01",
+  "events": [
+    {
+      "id": "doc_0001_e1",
+      "type": "Contact.Meet",
+      "trigger": {"text": "会见", "start": 17, "end": 19},
+      "arguments": [
+        {"role": "Agent", "entity_id": "P_001", "text": "维和部队指挥官", "start": 8, "end": 15},
+        {"role": "Target", "entity_id": "P_002", "text": "安全委员会代表", "start": 20, "end": 28},
+        {"role": "Place", "entity_id": "L_Basra", "text": "巴士拉", "start": 15, "end": 18}
+      ],
+      "time": {"value": "2014-03-01", "span": [0, 10]},
+      "relations": {
+        "temporal": [],
+        "causal": [],
+        "subevent": []
+      }
+    },
+    {
+      "id": "doc_0001_e2",
+      "type": "Conflict.Protest",
+      "trigger": {"text": "抗议", "start": 54, "end": 56},
+      "arguments": [
+        {"role": "Agent", "entity_id": "P_001", "text": "示威者", "start": 41, "end": 44},
+        {"role": "Target", "entity_id": "G_001", "text": "安全委员会", "start": 28, "end": 33},
+        {"role": "Place", "entity_id": "L_Basra", "text": "广场", "start": 47, "end": 49}
+      ],
+      "time": {"value": "2014-03-05", "span": [40, 52]},
+      "relations": {
+        "temporal": [{"type": "AFTER", "head": "doc_0001_e1", "tail": "doc_0001_e2"}],
+        "causal": [],
+        "subevent": []
+      }
+    }
+  ]
+}
