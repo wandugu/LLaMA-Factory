@@ -10,14 +10,22 @@ per_device_train_batch_size: 4
 gradient_accumulation_steps: 8
 learning_rate: 2.0e-5
 num_train_epochs: 1
-logging_steps: 10
+logging_steps: 20
 bf16: true
-report_to: none
 
 # 训练时长控制
-max_steps: 10          # 只跑 200 个 optimizer step；优先级最高
-save_steps: 5         # 末步自动保存
-eval_steps: 5          # 每 50 步算一次 eval_loss
+# max_steps: 20          # 只跑 x 个 optimizer step；优先级最高
+save_steps: 200         # x 步自动保存
+eval_steps: 100          # 每 x 步算一次 eval_loss
 
 # 显存控制
-use_gradient_checkpointing: false
+gradient_checkpointing: false
+
+# 权重加载
+resume_from_checkpoint: null      # 或直接删除该键
+overwrite_output_dir: true
+save_safetensors: true            # 权衡安全
+
+#wandb
+report_to: wandb
+run_name: qwen4b_sft_debug
