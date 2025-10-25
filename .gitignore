@@ -177,3 +177,11 @@ wandb/
 swanlog/
 generated_predictions.jsonl
 predictions_score.json
+
+# maven
+maven_sft_*.jsonl
+maven_sft_*.jsonl.stats.json
+*.stats.json
+nohup.out
+data/processed/*.jsonl
+data/processed/*.jsonl.stats.json
