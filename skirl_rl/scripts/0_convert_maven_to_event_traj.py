@@ -508,12 +508,33 @@ def classify_label(skeleton_seq: List[str]) -> str:
     return "negative"
 
 
+AGENT_ROLE_KEYWORDS = {
+    "agent",
+    "perpetrator",
+    "actor",
+    "attacker",
+    "suspect",
+    "subject",
+    "person",
+}
+
+
+def _collect_agent_candidates(event: EventEntry) -> List[str]:
+    candidates: List[str] = []
+    for arg in event.arguments:
+        role = (arg.role or "").strip().lower()
+        if any(keyword in role for keyword in AGENT_ROLE_KEYWORDS):
+            candidates.append(arg.entity_id)
+    return candidates
+
+
 def build_trajectories(events: List[EventEntry], skeleton_map: Dict[str, object]) -> Tuple[List[TrajectoryEntry], Dict[str, str]]:
     grouped: Dict[Tuple[str, str], List[Tuple[EventEntry, str]]] = defaultdict(list)
     for event in events:
-        agent_ids = [arg.entity_id for arg in event.arguments if arg.role.lower() == "agent".lower()]
+        agent_ids = _collect_agent_candidates(event)
         if not agent_ids:
-            continue
+            fallback_agent = f"doc::{event.doc_id}"
+            agent_ids = [fallback_agent]
         for agent in agent_ids:
             grouped[(agent, month_key(event.time.value))].append((event, agent))
 
