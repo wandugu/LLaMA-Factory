@@ -1,0 +1,24 @@
+{
+  "id": "doc_0002",
+  "title": "抗议升级为袭击",
+  "content": "3月18日，抗议者向检查站投掷燃烧瓶，导致多名士兵受伤。",
+  "publish_time": "2014-03-18",
+  "events": [
+    {
+      "id": "doc_0002_e1",
+      "type": "Conflict.Attack",
+      "trigger": {"text": "投掷", "start": 15, "end": 17},
+      "arguments": [
+        {"role": "Agent", "entity_id": "P_001", "text": "抗议者", "start": 0, "end": 3},
+        {"role": "Target", "entity_id": "O_017", "text": "检查站", "start": 17, "end": 20},
+        {"role": "Place", "entity_id": "L_Checkpoint", "text": "检查站", "start": 17, "end": 20}
+      ],
+      "time": {"value": "2014-03-18", "span": [0, 8]},
+      "relations": {
+        "temporal": [{"type": "AFTER", "head": "doc_0001_e2", "tail": "doc_0002_e1"}],
+        "causal": [],
+        "subevent": []
+      }
+    }
+  ]
+}

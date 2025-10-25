@@ -1,0 +1,40 @@
+{
+  "id": "doc_0003",
+  "title": "爆炸造成警报",
+  "content": "3月21日晚，安置在巴士拉港口的爆炸装置被引爆，造成仓库受损。",
+  "publish_time": "2014-03-21",
+  "events": [
+    {
+      "id": "doc_0003_e1",
+      "type": "Conflict.Explosion",
+      "trigger": {"text": "引爆", "start": 20, "end": 22},
+      "arguments": [
+        {"role": "Agent", "entity_id": "P_001", "text": "安置装置者", "start": 5, "end": 10},
+        {"role": "Target", "entity_id": "O_099", "text": "仓库", "start": 26, "end": 28},
+        {"role": "Place", "entity_id": "L_BasraPort", "text": "巴士拉港口", "start": 12, "end": 18}
+      ],
+      "time": {"value": "2014-03-21", "span": [0, 9]},
+      "relations": {
+        "temporal": [{"type": "AFTER", "head": "doc_0002_e1", "tail": "doc_0003_e1"}],
+        "causal": [{"type": "CAUSE", "head": "doc_0003_e1", "tail": "doc_0003_e2"}],
+        "subevent": []
+      }
+    },
+    {
+      "id": "doc_0003_e2",
+      "type": "Movement.Transportation",
+      "trigger": {"text": "撤离", "start": 29, "end": 31},
+      "arguments": [
+        {"role": "Agent", "entity_id": "P_044", "text": "工人", "start": 23, "end": 25},
+        {"role": "Target", "entity_id": "P_044", "text": "工人", "start": 23, "end": 25},
+        {"role": "Place", "entity_id": "L_BasraPort", "text": "巴士拉港口", "start": 12, "end": 18}
+      ],
+      "time": {"value": "2014-03-22", "span": [0, 9]},
+      "relations": {
+        "temporal": [{"type": "AFTER", "head": "doc_0003_e1", "tail": "doc_0003_e2"}],
+        "causal": [],
+        "subevent": []
+      }
+    }
+  ]
+}
