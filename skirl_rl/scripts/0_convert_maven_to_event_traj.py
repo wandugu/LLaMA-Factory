@@ -160,8 +160,11 @@ class PreferencePair(BaseModel):
 
 
 class SFTSample(BaseModel):
-    prompt: str
-    response: str
+    instruction: str
+    input: str
+    output: str
+    system: str
+    history: List[List[str]] = Field(default_factory=list)
 
 
 class RLPrompt(BaseModel):
@@ -196,7 +199,7 @@ def write_jsonl(path: Path, records: Iterable[BaseModel]) -> DatasetStats:
     with path.open("w", encoding="utf-8") as f:
         for item in records:
             if isinstance(item, BaseModel):
-                payload = item.model_dump()
+                payload = item.model_dump(exclude_none=True)
             else:
                 payload = item
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -789,12 +792,14 @@ def build_context_window(
     return context, token_count
 
 
-def validate_sft_sample(prompt: str, response: str) -> None:
+def validate_sft_sample(sample: SFTSample) -> None:
     required_sections = ["[DOC]", "[CONTEXT]", "[EVENT]", "[TRIGGER]", "[ARGUMENTS]", "[TIME]"]
     for section in required_sections:
-        assert section in prompt, f"prompt 缺少 {section} 段落"
-    assert "[ARGUMENTS]\n" in prompt, "prompt 缺少论元列表"
-    json.loads(response)
+        assert section in sample.input, f"input 缺少 {section} 段落"
+    assert "[ARGUMENTS]\n" in sample.input, "input 缺少论元列表"
+    assert sample.instruction.strip(), "instruction 不能为空"
+    assert isinstance(sample.history, list), "history 必须是列表"
+    json.loads(sample.output)
 
 
 def build_sft_samples(
@@ -831,8 +836,13 @@ def build_sft_samples(
             "args": {arg.role: arg.entity_id for arg in event.arguments},
         }
         response = json.dumps(response_payload, ensure_ascii=False)
-        validate_sft_sample(prompt, response)
-        sample = SFTSample(prompt=prompt, response=response)
+        sample = SFTSample(
+            instruction="根据上下文抽取事件的触发词、类型与论元。",
+            input=prompt,
+            output=response,
+            system="你是一名事件抽取助手，请使用 JSON 输出结果。",
+        )
+        validate_sft_sample(sample)
         samples.append(sample)
         if event.split:
             grouped[event.split].append(sample)
@@ -896,6 +906,26 @@ def build_summary(stats: List[DatasetStats], output_path: Path) -> None:
     output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def write_dataset_info(dst: Path) -> None:
+    dataset_info_path = dst / "dataset_info.json"
+    dataset_info = {
+        "maven_sft": {
+            "file_name": "maven_sft.jsonl",
+            "formatting": "alpaca",
+            "columns": {
+                "prompt": "instruction",
+                "query": "input",
+                "response": "output",
+                "system": "system",
+                "history": "history",
+            },
+        }
+    }
+    dataset_info_path.write_text(
+        json.dumps(dataset_info, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert MAVEN raw JSON to processed SKIRL datasets")
     parser.add_argument("--src", type=Path, default=DEFAULT_SRC, help="原始 JSON 目录")
@@ -931,6 +961,8 @@ def main() -> None:
 
     rl_prompts = build_rl_prompts(all_trajs)
     rl_stats = write_jsonl(args.dst / "rl_prompts.jsonl", rl_prompts)
+
+    write_dataset_info(args.dst)
 
     summary_path = args.dst / "summary.stats.json"
     summary_items = [event_stats, traj_stats, pair_stats, sft_stats]
