@@ -3,10 +3,10 @@
 """将 MAVEN 系列原始 JSON 转换为 SKIRL-RL 所需的五类下游文件。
 
 脚本逻辑概览：
-1. 读取 ``data/maven_raw`` 下的文档，并结合映射表构造 ``event.jsonl``。
+1. 读取 ``data/maven_raw`` 下的 JSON 文档或 ``train/valid/test.jsonl`` 拆分，并结合映射表构造 ``event.jsonl``。
 2. 基于 Agent 论元汇聚事件，生成按月划分的 person 轨迹 ``traj.jsonl``。
 3. 对每条轨迹构造降质版本，写出偏好对 ``pairs.jsonl``。
-4. 将事件转写成指令微调样本 ``maven_sft.jsonl``。
+4. 将事件转写成指令微调样本 ``maven_sft.jsonl`` 及按拆分输出的 ``maven_sft_{split}.jsonl``。
 5. 将轨迹截断为前缀提示生成 ``rl_prompts.jsonl``。
 
 所有输出均通过 Pydantic schema 校验，同时生成统计信息 ``*.stats.json`` 与汇总 ``summary.stats.json``。
@@ -109,6 +109,7 @@ class EventEntry(BaseModel):
     confidence: EventConfidence
     source: str
     mapping: Dict[str, str]
+    split: Optional[str] = None
 
 
 class TrajectoryStep(BaseModel):
@@ -248,6 +249,8 @@ def normalise_span(value: Dict[str, int] | List[int]) -> List[int]:
         return [int(value["start"]), int(value["end"])]
     if all(k in value for k in ("start_token", "end_token")):
         return [int(value["start_token"]), int(value["end_token"])]
+    if "offset" in value and isinstance(value["offset"], list) and len(value["offset"]) == 2:
+        return [int(value["offset"][0]), int(value["offset"][1])]
     raise ValueError(f"无法解析 span: {value}")
 
 
@@ -262,40 +265,94 @@ def ensure_time(event: Dict[str, object], fallback_date: str) -> Tuple[str, List
     return fallback_date, [0, 0]
 
 
+def extract_trigger_from_mentions(
+    event: Dict[str, object],
+    doc_content: Optional[List[Dict[str, object]]],
+) -> Tuple[str, List[int]]:
+    mentions = event.get("mention") or event.get("mentions") or []
+    if isinstance(mentions, dict):
+        mentions = [mentions]
+    if not mentions:
+        return "", [0, 0]
+    mention = mentions[0]
+    trigger_text = mention.get("trigger_word") or mention.get("text") or ""
+    offset = mention.get("offset") or mention.get("span") or [0, 0]
+    if not trigger_text and doc_content:
+        sent_id = mention.get("sent_id")
+        if isinstance(sent_id, int) and 0 <= sent_id < len(doc_content):
+            tokens = doc_content[sent_id].get("tokens", [])
+            if (
+                isinstance(tokens, list)
+                and isinstance(offset, list)
+                and len(offset) == 2
+            ):
+                start, end = offset
+                start = max(int(start), 0)
+                end = max(int(end), start)
+                slice_tokens = tokens[start:end]
+                if slice_tokens and all(isinstance(tok, str) for tok in slice_tokens):
+                    trigger_text = " ".join(slice_tokens).strip()
+    try:
+        span = normalise_span(offset)
+    except Exception:  # noqa: BLE001
+        span = [0, 0]
+    return trigger_text, span
+
+
 def parse_event(
     doc_id: str,
     event: Dict[str, object],
     skeleton_map: Dict[str, List[str] | str],
     cameo_map: Dict[str, str],
     fallback_date: str,
+    doc_content: Optional[List[Dict[str, object]]] = None,
+    split: Optional[str] = None,
 ) -> Optional[EventEntry]:
-    trigger = event.get("trigger", {})
-    trigger_text = trigger.get("text", "")
-    if not trigger_text:
-        LOGGER.warning("事件 %s 缺少 trigger.text，已跳过", event.get("id"))
-        return None
-    trigger_span = normalise_span(trigger)
+    trigger = event.get("trigger") or {}
     trigger_type = event.get("type", "Unknown")
-    time_value, time_span = ensure_time(event, fallback_date)
+    using_new_schema = "trigger" not in event or not trigger
 
-    arguments: List[EventArgument] = []
-    for arg in event.get("arguments", []):
-        role = arg.get("role", "")
-        if not role:
-            continue
-        entity_id = arg.get("entity_id") or arg.get("text") or f"{trigger_type}_{role}"
+    if using_new_schema:
+        trigger_text, trigger_span = extract_trigger_from_mentions(event, doc_content)
+        if not trigger_text:
+            LOGGER.warning("事件 %s 缺少触发词，已跳过", event.get("id"))
+            return None
+        time_value, time_span = fallback_date, [0, 0]
+        arguments: List[EventArgument] = []
+        relations_dict: Dict[str, List[Dict[str, str]]] = {}
+        source = "MAVEN-JSONL"
+    else:
+        trigger_text = trigger.get("text", "")
+        if not trigger_text:
+            LOGGER.warning("事件 %s 缺少 trigger.text，已跳过", event.get("id"))
+            return None
         try:
-            span = normalise_span(arg)
+            trigger_span = normalise_span(trigger)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("事件 %s 的 argument span 解析失败：%s", event.get("id"), exc)
-            span = [0, 0]
-        arguments.append(EventArgument(role=role, entity_id=str(entity_id), span=span))
+            LOGGER.warning("事件 %s 的 trigger span 解析失败：%s", event.get("id"), exc)
+            trigger_span = [0, 0]
+        time_value, time_span = ensure_time(event, fallback_date)
 
-    if not arguments:
-        LOGGER.warning("事件 %s 不含 argument，已跳过", event.get("id"))
-        return None
+        arguments = []
+        for arg in event.get("arguments", []):
+            role = arg.get("role", "")
+            if not role:
+                continue
+            entity_id = arg.get("entity_id") or arg.get("text") or f"{trigger_type}_{role}"
+            try:
+                span = normalise_span(arg)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("事件 %s 的 argument span 解析失败：%s", event.get("id"), exc)
+                span = [0, 0]
+            arguments.append(EventArgument(role=role, entity_id=str(entity_id), span=span))
 
-    relations_dict = event.get("relations", {})
+        if not arguments:
+            LOGGER.warning("事件 %s 不含 argument，已跳过", event.get("id"))
+            return None
+
+        relations_dict = event.get("relations", {})
+        source = "MAVEN|MAVEN-Arg|MAVEN-ERE|RAMS"
+
     relations = EventRelations(
         temporal=[EventRelation(**rel) for rel in relations_dict.get("temporal", [])],
         causal=[EventRelation(**rel) for rel in relations_dict.get("causal", [])],
@@ -324,8 +381,9 @@ def parse_event(
             time=EventTime(value=time_value, span=time_span),
             relations=relations,
             confidence=confidence,
-            source="MAVEN|MAVEN-Arg|MAVEN-ERE|RAMS",
+            source=source,
             mapping=mapping,
+            split=split,
         )
     except ValidationError as exc:
         LOGGER.error("事件 %s 校验失败：%s", event.get("id"), exc)
@@ -338,9 +396,61 @@ def load_events(src_dir: Path, skeleton_map: Dict[str, object], cameo_map: Dict[
     if not src_dir.exists():
         LOGGER.error("原始目录 %s 不存在。", src_dir)
         return events
+
+    split_files = {name: src_dir / f"{name}.jsonl" for name in ("train", "valid", "test")}
+    has_jsonl = any(path.exists() for path in split_files.values())
+
+    if has_jsonl:
+        for split_name, jsonl_path in split_files.items():
+            if not jsonl_path.exists():
+                continue
+            with jsonl_path.open("r", encoding="utf-8") as f:
+                iterator = enumerate(tqdm(f, desc=f"加载{split_name}", unit="doc"), start=1)
+                for line_idx, line in iterator:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError as exc:  # noqa: PERF203
+                        LOGGER.error("解析 %s 第 %d 行失败：%s", jsonl_path.name, line_idx, exc)
+                        continue
+                    doc_id = data.get("id") or f"{split_name}_{line_idx:06d}"
+                    fallback_date = (
+                        data.get("publish_time")
+                        or data.get("time")
+                        or data.get("date")
+                        or "2014-01-01"
+                    )
+                    doc_content = data.get("content")
+                    raw_events = data.get("events") or []
+                    if not raw_events and data.get("candidates"):
+                        raw_events = [
+                            {"id": cand.get("id"), "type": "Unknown", "mention": [cand]}
+                            for cand in data.get("candidates", [])
+                        ]
+                    for event in raw_events:
+                        entry = parse_event(
+                            doc_id,
+                            event,
+                            skeleton_map,
+                            cameo_map,
+                            fallback_date,
+                            doc_content=doc_content,
+                            split=split_name,
+                        )
+                        if entry is not None:
+                            events.append(entry)
+        LOGGER.info(
+            "共解析事件 %d 条，来源拆分：%s。",
+            len(events),
+            ", ".join(name for name, path in split_files.items() if path.exists()),
+        )
+        return events
+
     json_files = sorted(path for path in src_dir.glob("*.json"))
     if not json_files:
-        LOGGER.error("原始目录 %s 下未找到 JSON 文件。", src_dir)
+        LOGGER.error("原始目录 %s 下未找到 JSON/JSONL 文件。", src_dir)
         return events
 
     for json_path in tqdm(json_files, desc="加载文档"):
@@ -348,8 +458,20 @@ def load_events(src_dir: Path, skeleton_map: Dict[str, object], cameo_map: Dict[
             data = json.load(f)
         doc_id = data.get("id") or json_path.stem
         fallback_date = data.get("publish_time") or "2014-01-01"
-        for event in data.get("events", []):
-            entry = parse_event(doc_id, event, skeleton_map, cameo_map, fallback_date)
+        raw_events = data.get("events") or []
+        if not raw_events and data.get("candidates"):
+            raw_events = [
+                {"id": cand.get("id"), "type": "Unknown", "mention": [cand]}
+                for cand in data.get("candidates", [])
+            ]
+        for event in raw_events:
+            entry = parse_event(
+                doc_id,
+                event,
+                skeleton_map,
+                cameo_map,
+                fallback_date,
+            )
             if entry is not None:
                 events.append(entry)
     LOGGER.info("共解析事件 %d 条。", len(events))
@@ -508,8 +630,9 @@ def format_arguments(arguments: List[EventArgument]) -> str:
     return "\n".join(lines) if lines else "- None"
 
 
-def build_sft_samples(events: List[EventEntry]) -> List[SFTSample]:
+def build_sft_samples(events: List[EventEntry]) -> Tuple[List[SFTSample], Dict[str, List[SFTSample]]]:
     samples: List[SFTSample] = []
+    grouped: Dict[str, List[SFTSample]] = defaultdict(list)
     for event in events:
         prompt = (
             f"[DOC] {event.doc_id}\n"
@@ -522,9 +645,15 @@ def build_sft_samples(events: List[EventEntry]) -> List[SFTSample]:
         agent_roles = [arg.entity_id for arg in event.arguments if arg.role.lower() == "agent"]
         agent_text = "、".join(agent_roles) if agent_roles else "未知主体"
         response = f"事件{event.event_id}描述了{event.trigger.text}，类型为{event.trigger.type}，主体为{agent_text}。"
-        samples.append(SFTSample(prompt=prompt, response=response))
+        sample = SFTSample(prompt=prompt, response=response)
+        samples.append(sample)
+        if event.split:
+            grouped[event.split].append(sample)
     LOGGER.info("构造 SFT 样本 %d 条。", len(samples))
-    return samples
+    if grouped:
+        for split_name, split_samples in grouped.items():
+            LOGGER.info("  - %s: %d 条", split_name, len(split_samples))
+    return samples, grouped
 
 
 def build_rl_prompts(trajectories: List[TrajectoryEntry]) -> List[RLPrompt]:
@@ -596,14 +725,21 @@ def main() -> None:
     traj_stats = write_jsonl(args.dst / "traj.jsonl", all_trajs)
     pair_stats = write_jsonl(args.dst / "pairs.jsonl", pairs)
 
-    sft_samples = build_sft_samples(events)
+    sft_samples, sft_by_split = build_sft_samples(events)
     sft_stats = write_jsonl(args.dst / "maven_sft.jsonl", sft_samples)
+    sft_split_stats: List[DatasetStats] = []
+    for split_name, split_samples in sorted(sft_by_split.items()):
+        split_path = args.dst / f"maven_sft_{split_name}.jsonl"
+        sft_split_stats.append(write_jsonl(split_path, split_samples))
 
     rl_prompts = build_rl_prompts(all_trajs)
     rl_stats = write_jsonl(args.dst / "rl_prompts.jsonl", rl_prompts)
 
     summary_path = args.dst / "summary.stats.json"
-    build_summary([event_stats, traj_stats, pair_stats, sft_stats, rl_stats], summary_path)
+    summary_items = [event_stats, traj_stats, pair_stats, sft_stats]
+    summary_items.extend(sft_split_stats)
+    summary_items.append(rl_stats)
+    build_summary(summary_items, summary_path)
     LOGGER.info("处理完成，结果写入 %s", args.dst)
 
 
