@@ -1,13 +1,13 @@
-model_name_or_path: ${MODEL_ID}
+model_name_or_path: /root/autodl-tmp/Qwen3-4B-Base/
 stage: sft
 datasets:
   - path: data/processed/maven_sft.jsonl
-output_dir: outputs/qwen-4b-mypretrain
+output_dir: /root/autodl-tmp/qwen-4b-mypretrain
 per_device_train_batch_size: 4
 gradient_accumulation_steps: 8
 learning_rate: 2.0e-5
-num_train_epochs: 3
-save_steps: 500
-logging_steps: 50
+num_train_epochs: 1
+save_steps: 10
+logging_steps: 10
 bf16: true
 report_to: none
