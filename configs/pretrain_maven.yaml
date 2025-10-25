@@ -1,13 +1,23 @@
 model_name_or_path: /root/autodl-tmp/Qwen3-4B-Base/
 stage: sft
+
 dataset: maven_sft
-dataset_dir: data/processed/maven_sft.jsonl
+dataset_dir: data/processed/
 output_dir: /root/autodl-tmp/qwen-4b-mypretrain
+
+do_train: true
 per_device_train_batch_size: 4
 gradient_accumulation_steps: 8
 learning_rate: 2.0e-5
 num_train_epochs: 1
-save_steps: 10
 logging_steps: 10
 bf16: true
 report_to: none
+
+# 训练时长控制
+max_steps: 10          # 只跑 200 个 optimizer step；优先级最高
+save_steps: 5         # 末步自动保存
+eval_steps: 5          # 每 50 步算一次 eval_loss
+
+# 显存控制
+use_gradient_checkpointing: false
