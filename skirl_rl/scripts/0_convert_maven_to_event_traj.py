@@ -343,6 +343,7 @@ def parse_event(
     trigger = event.get("trigger") or {}
     trigger_type = resolve_event_type(event)
     using_new_schema = "trigger" not in event or not trigger
+    is_candidate = bool(event.get("_candidate_event"))
 
     if using_new_schema:
         trigger_text, trigger_span = extract_trigger_from_mentions(event, doc_content)
@@ -352,7 +353,7 @@ def parse_event(
         time_value, time_span = fallback_date, [0, 0]
         arguments: List[EventArgument] = []
         relations_dict: Dict[str, List[Dict[str, str]]] = {}
-        source = "MAVEN-JSONL"
+        source = "MAVEN-CANDIDATE" if is_candidate else "MAVEN-JSONL"
     else:
         trigger_text = trigger.get("text", "")
         if not trigger_text:
@@ -454,7 +455,12 @@ def load_events(src_dir: Path, skeleton_map: Dict[str, object], cameo_map: Dict[
                     raw_events = data.get("events") or []
                     if not raw_events and data.get("candidates"):
                         raw_events = [
-                            {"id": cand.get("id"), "type": "Unknown", "mention": [cand]}
+                            {
+                                "id": cand.get("id"),
+                                "type": "Unknown",
+                                "mention": [cand],
+                                "_candidate_event": True,
+                            }
                             for cand in data.get("candidates", [])
                         ]
                     for event in raw_events:
@@ -489,7 +495,12 @@ def load_events(src_dir: Path, skeleton_map: Dict[str, object], cameo_map: Dict[
         raw_events = data.get("events") or []
         if not raw_events and data.get("candidates"):
             raw_events = [
-                {"id": cand.get("id"), "type": "Unknown", "mention": [cand]}
+                {
+                    "id": cand.get("id"),
+                    "type": "Unknown",
+                    "mention": [cand],
+                    "_candidate_event": True,
+                }
                 for cand in data.get("candidates", [])
             ]
         for event in raw_events:
@@ -1218,6 +1229,12 @@ def main() -> None:
     if not events:
         LOGGER.error("未生成任何事件，流程终止。")
         return
+
+    filtered_events = [event for event in events if event.source != "MAVEN-CANDIDATE"]
+    removed_count = len(events) - len(filtered_events)
+    if removed_count:
+        LOGGER.info("过滤掉 %d 条仅包含候选触发词的事件。", removed_count)
+    events = filtered_events
 
     doc_ids = {event.doc_id for event in events}
     context_index = build_doc_context_index(args.src, doc_ids)
