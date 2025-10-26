@@ -11,6 +11,9 @@ from typing import Dict, Iterable, List, Sequence
 import wandb
 import numpy as np
 
+# 设置 tags 和其他配置
+tags = ["rm training", "qwen3-4b", "maven"]
+
 # 初始化 wandb
 wandb.init(
     project="maven-irl",
@@ -18,7 +21,9 @@ wandb.init(
         "learning_rate": 0.05,
         "epochs": 150,
         "batch_size": 32,
-    }
+    },
+    name="maven-rm",  # 自定义实验名称
+    tags=tags                           # 添加标签
 )
 
 if __package__ is None or __package__ == "":
