@@ -8,8 +8,18 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
-
+import wandb
 import numpy as np
+
+# 初始化 wandb
+wandb.init(
+    project="maven-irl",
+    config={
+        "learning_rate": 0.05,
+        "epochs": 150,
+        "batch_size": 32,
+    }
+)
 
 if __package__ is None or __package__ == "":
     import sys
@@ -99,6 +109,12 @@ class MaxEntIRL:
             grad = data_expectation - model_expectation
             weights += self.lr * grad
 
+            # 记录训练损失到 wandb
+            wandb.log({
+                "epoch": epoch,
+                "loss": np.linalg.norm(data_expectation - model_expectation),
+            })
+
             # pairwise regulariser gradient (approximation)
             if pairs:
                 traj_map = {traj.trajectory_id: traj for traj in trajectories}
@@ -127,6 +143,8 @@ class MaxEntIRL:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"theta": self.theta.tolist(), "temperature": self.temperature}
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 上传模型文件到wandb
+        wandb.save(str(path))
 
     def load(self, path: Path) -> None:
         payload = json.loads(path.read_text("utf-8"))
@@ -200,3 +218,5 @@ def _test_scoring(tmp_dir: Path) -> None:
 if __name__ == "__main__":
     args = build_argparser().parse_args()
     train(args)
+    # 训练完成后，关闭 wandb 记录
+    wandb.finish()
