@@ -28,4 +28,4 @@ save_safetensors: true            # 权衡安全
 
 #wandb
 report_to: wandb
-run_name: qwen4b_sft_debug
+run_name: maven_sft

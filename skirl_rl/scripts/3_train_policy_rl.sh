@@ -10,8 +10,8 @@ export WANDB_TAGS="sft,qwen3-4b,maven"
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CONFIG_PATH="${ROOT_DIR}/configs/ppo_rl.yaml"
 PROMPTS_PATH="${ROOT_DIR}/data/processed/rl_prompts.jsonl"
-REWARD_CKPT="${ROOT_DIR}/outputs/qwen-4b-rm/reward.ckpt"
-OUTPUT_DIR="${ROOT_DIR}/outputs/qwen-4b-rl"
+REWARD_CKPT="/root/autodl-tmp/qwen-4b-maven-rm/reward.ckpt"
+OUTPUT_DIR="/root/autodl-tmp/qwen-4b-rl"
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
 MODEL_PATH=$(python - <<'PY' "${CONFIG_PATH}" "${ROOT_DIR}"
