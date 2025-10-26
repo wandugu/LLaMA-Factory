@@ -246,22 +246,22 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             # Get inputs
             self.model.eval()
             self.tokenizer.padding_side = "right"  # change padding side
-        queries, responses, rewards, metas = [], [], [], []
-        for idx in range(0, self.config.batch_size, self.config.mini_batch_size):
-            mini_batch = {
-                "input_ids": batch["input_ids"][idx : idx + self.config.mini_batch_size],
-                "attention_mask": batch["attention_mask"][idx : idx + self.config.mini_batch_size],
-            }
-            if "metas" in batch:
-                mini_batch["metas"] = batch["metas"][idx : idx + self.config.mini_batch_size]
-            mini_batch_queries, mini_batch_responses, mini_batch_metas = self.get_inputs(mini_batch)
-            mini_batch_rewards = self.get_rewards(
-                mini_batch_queries, mini_batch_responses, metas=mini_batch_metas
-            )
-            queries.extend(mini_batch_queries)
-            responses.extend(mini_batch_responses)
-            rewards.extend(mini_batch_rewards)
-            metas.extend(mini_batch_metas)
+            queries, responses, rewards, metas = [], [], [], []
+            for idx in range(0, self.config.batch_size, self.config.mini_batch_size):
+                mini_batch = {
+                    "input_ids": batch["input_ids"][idx : idx + self.config.mini_batch_size],
+                    "attention_mask": batch["attention_mask"][idx : idx + self.config.mini_batch_size],
+                }
+                if "metas" in batch:
+                    mini_batch["metas"] = batch["metas"][idx : idx + self.config.mini_batch_size]
+                mini_batch_queries, mini_batch_responses, mini_batch_metas = self.get_inputs(mini_batch)
+                mini_batch_rewards = self.get_rewards(
+                    mini_batch_queries, mini_batch_responses, metas=mini_batch_metas
+                )
+                queries.extend(mini_batch_queries)
+                responses.extend(mini_batch_responses)
+                rewards.extend(mini_batch_rewards)
+                metas.extend(mini_batch_metas)
 
             # Run PPO step
             self.model.train()
