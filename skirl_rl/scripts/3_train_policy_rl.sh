@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export WANDB_PROJECT="maven-irl"
+export WANDB_MODE="online"              # offline/online
+# 可选：团队与标签
+# export WANDB_ENTITY="your_team"
+export WANDB_TAGS="sft,qwen3-4b,maven"
+
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CONFIG_PATH="${ROOT_DIR}/configs/ppo_rl.yaml"
 PROMPTS_PATH="${ROOT_DIR}/data/processed/rl_prompts.jsonl"
-REWARD_CKPT="${ROOT_DIR}/outputs/qwen-4b-rm/reward.ckpt"
+REWARD_CKPT="/root/autodl-tmp/qwen-4b-maven-rm/reward.ckpt"
 OUTPUT_DIR="${ROOT_DIR}/outputs/qwen-4b-rl"
 
 cd "${ROOT_DIR}"
 
 if [ ! -f "${PROMPTS_PATH}" ]; then
   echo "[INFO] RL 提示缺失，先生成演示数据"
-  python skirl_rl/scripts/0_convert_maven_to_event_traj.py
+  exit 1
 fi
 
 if [ ! -f "${REWARD_CKPT}" ]; then

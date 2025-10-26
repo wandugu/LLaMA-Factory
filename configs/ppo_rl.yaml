@@ -1,4 +1,4 @@
-model_name_or_path: outputs/qwen-4b-mypretrain
+model_name_or_path: /root/autodl-tmp/qwen-4b-maven-sft-merged
 stage: ppo
 datasets:
   - path: data/processed/rl_prompts.jsonl
@@ -17,3 +17,6 @@ reward_args:
   reward_ckpt: outputs/qwen-4b-rm/reward.ckpt
   alpha: 0.6
   reward_clip: [-5.0, 5.0]
+#wandb
+report_to: wandb
+run_name: maven_rl
