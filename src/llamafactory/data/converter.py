@@ -367,10 +367,28 @@ class OpenAIDatasetConverter(DatasetConverter):
         return output
 
 
+@dataclass
+class SkirlRLDatasetConverter(AlpacaDatasetConverter):
+    """在 Alpaca 格式基础上附加 `_meta` 信息，供外部奖励回调使用。"""
+
+    def __call__(self, example: dict[str, Any]) -> dict[str, Any]:
+        output = super().__call__(example)
+        meta = example.get("_meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            for key in ("trajectory_id", "person_id"):
+                if key in example:
+                    meta[key] = example[key]
+
+        output["_meta"] = meta
+        return output
+
+
 DATASET_CONVERTERS = {
     "alpaca": AlpacaDatasetConverter,
     "sharegpt": SharegptDatasetConverter,
     "openai": OpenAIDatasetConverter,
+    "skirl_rl": SkirlRLDatasetConverter,
 }
 
 

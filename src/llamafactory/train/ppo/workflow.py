@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from importlib import import_module
 from typing import TYPE_CHECKING, Optional
 
 from ...data import MultiModalDataCollatorForSeq2Seq, get_dataset, get_template_and_fix_tokenizer
@@ -51,6 +52,13 @@ def run_ppo(
     # Create reference model and reward model
     ref_model = create_ref_model(model_args, finetuning_args, add_valuehead=True)
     reward_model = create_reward_model(model, model_args, finetuning_args)
+    reward_callback = None
+    if finetuning_args.reward_callback is not None:
+        module = import_module(f"llamafactory.plugins.reward_callbacks.{finetuning_args.reward_callback}")
+        builder = getattr(module, "build_reward_callback", None)
+        if builder is None:
+            raise ValueError(f"Reward callback {finetuning_args.reward_callback} 未提供 build_reward_callback 接口。")
+        reward_callback = builder(**(finetuning_args.reward_callback_args or {}))
 
     # Initialize our Trainer
     ppo_trainer: CustomPPOTrainer = CustomPPOTrainer(
@@ -63,6 +71,7 @@ def run_ppo(
         reward_model=reward_model,
         ref_model=ref_model,
         data_collator=data_collator,
+        reward_callback=reward_callback,
         **dataset_module,
         **tokenizer_module,
     )
