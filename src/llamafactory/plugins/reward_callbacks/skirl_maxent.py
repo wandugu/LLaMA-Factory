@@ -71,6 +71,15 @@ class SkirlMaxentRewardCallback:
         return [float(np.clip(v, lo, hi)) for v in values]
 
     @staticmethod
+    def _summarize_text(text: Optional[str], limit: int = 120) -> str:
+        if not text:
+            return "<empty>"
+        text = str(text).strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 1] + "…"
+
+    @staticmethod
     def _resolve_trajectory_id(meta: Optional[Dict]) -> Optional[str]:
         if not isinstance(meta, dict):
             return None
@@ -80,7 +89,12 @@ class SkirlMaxentRewardCallback:
             if isinstance(value, str) and value.strip():
                 return value.strip()
 
-        prompt_like = meta.get("prompt") or meta.get("raw_prompt") or meta.get("input")
+        prompt_like = (
+            meta.get("prompt")
+            or meta.get("raw_prompt")
+            or meta.get("raw_query")
+            or meta.get("input")
+        )
         if isinstance(prompt_like, str):
             match = re.search(r"\[TRAJ\]\s*([^\s]+)", prompt_like)
             if match:
@@ -107,8 +121,18 @@ class SkirlMaxentRewardCallback:
             trajectory = self.trajectories.get(trajectory_id)
             if trajectory is None:
                 meta_keys = sorted(meta.keys()) if isinstance(meta, dict) else "<non-dict>"
+                prompt_preview = self._summarize_text(
+                    meta.get("raw_prompt") if isinstance(meta, dict) else None
+                )
+                response_preview = self._summarize_text(
+                    meta.get("reference_response") if isinstance(meta, dict) else None
+                )
                 LOGGER.warning(
-                    "trajectory %s 未在缓存中找到，回退为零奖励 (meta keys=%s)", trajectory_id, meta_keys
+                    "trajectory %s 未在缓存中找到，回退为零奖励 (meta keys=%s, prompt≈%s, response≈%s)",
+                    trajectory_id,
+                    meta_keys,
+                    prompt_preview,
+                    response_preview,
                 )
                 rewards.append(0.0)
                 continue

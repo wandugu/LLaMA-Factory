@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List
 
@@ -23,6 +24,9 @@ if __package__ is None or __package__ == "":
     from irl.maxent_irl import MaxEntIRL  # type: ignore
 else:
     from ..irl.maxent_irl import MaxEntIRL
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class HeuristicRLTrainer:
@@ -65,6 +69,15 @@ class HeuristicRLTrainer:
         stats = []
         policy_logprobs = {}
         for prompt in prompts:
+            prompt_text = str(prompt.get("prompt", "")).strip()
+            response_text = str(prompt.get("response", "")).strip()
+            trajectory_id = prompt.get("trajectory_id") or "<unknown>"
+            LOGGER.info(
+                "RL 样本 %s\n[Prompt]\n%s\n[Response]\n%s",
+                trajectory_id,
+                prompt_text or "<empty>",
+                response_text or "<empty>",
+            )
             simulation = self.simulate_policy(prompt)
             combined = self.alpha * simulation["reward"] + (1 - self.alpha) * simulation["logprob"]
             policy_logprobs[prompt["trajectory_id"]] = combined
