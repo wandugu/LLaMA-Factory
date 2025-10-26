@@ -19,6 +19,7 @@ import math
 import os
 import sys
 import warnings
+from collections.abc import Iterator
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
@@ -159,6 +160,8 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         self.callback_handler = CallbackHandler(
             callbacks, self.accelerator.unwrap_model(self.model), self.tokenizer, self.optimizer, self.lr_scheduler
         )
+        # Transformers>=4.44 推荐通过 processing_class 访问分词器，避免重复 Warning
+        self.processing_class = tokenizer
         if self.args.max_steps > 0:
             logger.info_rank0("max_steps is given, it will override any value given in num_train_epochs")
 
@@ -238,6 +241,8 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 dataiter = iter(self.dataloader)
                 batch = next(dataiter)
 
+            batch, dataiter = self._prepare_full_batch(batch, dataiter)
+
             # Get inputs
             self.model.eval()
             self.tokenizer.padding_side = "right"  # change padding side
@@ -300,6 +305,81 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 break
 
         self.callback_handler.on_train_end(self.args, self.state, self.control)
+
+    def _prepare_full_batch(
+        self, batch: dict[str, Any], dataiter: Iterator[dict[str, Any]]
+    ) -> tuple[dict[str, Any], Iterator[dict[str, Any]]]:
+        target_size = self.config.batch_size
+        input_ids = batch.get("input_ids")
+        if not isinstance(input_ids, torch.Tensor):
+            return batch, dataiter
+
+        current_size = input_ids.size(0)
+        if current_size == target_size:
+            return batch, dataiter
+
+        merged_batch = self._clone_batch(batch)
+        while current_size < target_size:
+            try:
+                next_chunk = next(dataiter)
+            except StopIteration:
+                dataiter = iter(self.dataloader)
+                next_chunk = next(dataiter)
+
+            merged_batch = self._concat_batch(merged_batch, next_chunk)
+            current_size = merged_batch["input_ids"].size(0)
+
+        if current_size > target_size:
+            merged_batch = self._trim_batch(merged_batch, target_size)
+
+        return merged_batch, dataiter
+
+    @staticmethod
+    def _clone_batch(batch: dict[str, Any]) -> dict[str, Any]:
+        cloned_batch: dict[str, Any] = {}
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                cloned_batch[key] = value.clone()
+            elif isinstance(value, list):
+                cloned_batch[key] = value.copy()
+            elif isinstance(value, tuple):
+                cloned_batch[key] = list(value)
+            else:
+                cloned_batch[key] = value
+        return cloned_batch
+
+    @staticmethod
+    def _concat_batch(base: dict[str, Any], addition: dict[str, Any]) -> dict[str, Any]:
+        for key, value in addition.items():
+            if isinstance(value, torch.Tensor):
+                if key in base and isinstance(base[key], torch.Tensor):
+                    base[key] = torch.cat((base[key], value), dim=0)
+                else:
+                    base[key] = value.clone()
+            elif isinstance(value, list):
+                existing = base.get(key, [])
+                if isinstance(existing, list):
+                    base[key] = existing + value
+                else:
+                    base[key] = value.copy()
+            elif isinstance(value, tuple):
+                existing = base.get(key, [])
+                if isinstance(existing, list):
+                    base[key] = existing + list(value)
+                else:
+                    base[key] = list(value)
+            else:
+                base.setdefault(key, value)
+        return base
+
+    @staticmethod
+    def _trim_batch(batch: dict[str, Any], target_size: int) -> dict[str, Any]:
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                batch[key] = value[:target_size]
+            elif isinstance(value, list):
+                batch[key] = value[:target_size]
+        return batch
 
     @override
     def create_optimizer(

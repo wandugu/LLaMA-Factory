@@ -7,6 +7,10 @@ export WANDB_MODE="online"              # offline/online
 # export WANDB_ENTITY="your_team"
 export WANDB_TAGS="sft,qwen3-4b,maven"
 
+# 屏蔽 transformers 的冗余 WARNING，保持训练日志整洁
+export TRANSFORMERS_VERBOSITY="error"
+export TRANSFORMERS_NO_ADVISORY_WARNINGS="1"
+
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CONFIG_PATH="${ROOT_DIR}/configs/ppo_rl.yaml"
 PROMPTS_PATH="${ROOT_DIR}/data/processed/rl_prompts.jsonl"
@@ -50,8 +54,44 @@ fi
 
 mkdir -p "${OUTPUT_DIR}"
 
-if [ "${SKIRL_USE_OFFICIAL_PPO:-0}" -eq 1 ]; then
-  echo "[INFO] SKIRL_USE_OFFICIAL_PPO=1，尝试执行 LlamaFactory PPO"
+has_llamafactory() {
+  if command -v llamafactory-cli >/dev/null 2>&1; then
+    return 0
+  fi
+
+  python - <<'PY' >/dev/null 2>&1
+import importlib.util
+import sys
+
+sys.exit(0 if importlib.util.find_spec("llamafactory") is not None else 1)
+PY
+}
+
+USE_OFFICIAL="${SKIRL_USE_OFFICIAL_PPO:-auto}"
+SHOULD_USE_OFFICIAL=0
+
+case "${USE_OFFICIAL}" in
+  1|true|TRUE)
+    SHOULD_USE_OFFICIAL=1
+    ;;
+  0|false|FALSE)
+    SHOULD_USE_OFFICIAL=0
+    ;;
+  auto)
+    if has_llamafactory; then
+      SHOULD_USE_OFFICIAL=1
+    fi
+    ;;
+  *)
+    echo "[WARN] 未识别的 SKIRL_USE_OFFICIAL_PPO=${USE_OFFICIAL}，回退为 auto 检测"
+    if has_llamafactory; then
+      SHOULD_USE_OFFICIAL=1
+    fi
+    ;;
+esac
+
+if [ "${SHOULD_USE_OFFICIAL}" -eq 1 ]; then
+  echo "[INFO] 检测到 LlamaFactory PPO，直接执行官方 CLI"
   if [ -z "${MODEL_PATH}" ]; then
     echo "[ERROR] 配置 ${CONFIG_PATH} 未设置 model_name_or_path"
     exit 1
