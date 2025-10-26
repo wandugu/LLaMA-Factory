@@ -244,9 +244,17 @@ class RLHFArguments:
         default=None,
         metadata={"help": "The number of bits to quantize the reward model."},
     )
-    reward_model_type: Literal["lora", "full", "api"] = field(
+    reward_model_type: Literal["lora", "full", "api", "callback"] = field(
         default="lora",
-        metadata={"help": "The type of the reward model in PPO training. Lora model only supports lora training."},
+        metadata={"help": "The type of the reward provider in PPO training."},
+    )
+    reward_callback: Optional[str] = field(
+        default=None,
+        metadata={"help": "Name of the external reward callback when reward_model_type=callback."},
+    )
+    reward_callback_args: dict[str, Any] = field(
+        default_factory=dict,
+        metadata={"help": "Keyword arguments that will be forwarded to the reward callback builder."},
     )
     ld_alpha: Optional[float] = field(
         default=None,
@@ -534,8 +542,11 @@ class FinetuningArguments(
         assert self.ref_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
         assert self.reward_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
 
-        if self.stage == "ppo" and self.reward_model is None:
-            raise ValueError("`reward_model` is necessary for PPO training.")
+        if self.stage == "ppo" and self.reward_model is None and self.reward_callback is None:
+            raise ValueError("Either `reward_model` or `reward_callback` must be provided for PPO training.")
+
+        if self.reward_model_type == "callback" and self.reward_callback is None:
+            raise ValueError("Please specify `reward_callback` when reward_model_type is set to callback.")
 
         if self.stage == "ppo" and self.reward_model_type == "lora" and self.finetuning_type != "lora":
             raise ValueError("`reward_model_type` cannot be lora for Freeze/Full PPO training.")

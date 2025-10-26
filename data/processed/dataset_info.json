@@ -9,5 +9,13 @@
       "system": "system",
       "history": "history"
     }
+  },
+  "maven_rl": {
+    "file_name": "rl_prompts.jsonl",
+    "formatting": "skirl_rl",
+    "columns": {
+      "prompt": "prompt",
+      "response": "response"
+    }
   }
 }

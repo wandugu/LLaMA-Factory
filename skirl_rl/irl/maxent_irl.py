@@ -8,18 +8,73 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
-import wandb
 import numpy as np
 
-# 初始化 wandb
-wandb.init(
-    project="maven-irl",
-    config={
-        "learning_rate": 0.05,
-        "epochs": 150,
-        "batch_size": 32,
-    }
-)
+try:  # pragma: no cover - 可选依赖
+    import wandb
+except Exception:  # noqa: BLE001 - 尽量保证离线环境也能运行
+    wandb = None  # type: ignore[assignment]
+
+
+def _wandb_run() -> "wandb.sdk.wandb_run.Run | None":  # type: ignore[name-defined]
+    """延迟初始化 wandb，确保在无依赖环境下也能运行。"""
+
+    if wandb is None:  # type: ignore[truthy-function]
+        return None
+
+    run = getattr(_wandb_run, "_cached_run", None)
+    if run is not None:
+        return run
+
+    try:
+        run = wandb.init(  # type: ignore[attr-defined]
+            project="maven-irl",
+            config={
+                "learning_rate": 0.05,
+                "epochs": 150,
+                "batch_size": 32,
+            },
+            name="maven-rm",
+            tags=["rm training", "qwen3-4b", "maven"],
+        )
+    except Exception:  # noqa: BLE001 - wandb 初始化失败时静默降级
+        run = None
+
+    setattr(_wandb_run, "_cached_run", run)
+    return run
+
+
+def _wandb_log(payload: dict[str, float]) -> None:
+    run = _wandb_run()
+    if run is None:
+        return
+
+    try:
+        wandb.log(payload)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _wandb_save(path: str) -> None:
+    run = _wandb_run()
+    if run is None:
+        return
+
+    try:
+        wandb.save(path)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _wandb_finish() -> None:
+    run = getattr(_wandb_run, "_cached_run", None)
+    if run is None:
+        return
+
+    try:
+        wandb.finish()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
 
 if __package__ is None or __package__ == "":
     import sys
@@ -110,10 +165,12 @@ class MaxEntIRL:
             weights += self.lr * grad
 
             # 记录训练损失到 wandb
-            wandb.log({
-                "epoch": epoch,
-                "loss": np.linalg.norm(data_expectation - model_expectation),
-            })
+            _wandb_log(
+                {
+                    "epoch": epoch,
+                    "loss": float(np.linalg.norm(data_expectation - model_expectation)),
+                }
+            )
 
             # pairwise regulariser gradient (approximation)
             if pairs:
@@ -143,8 +200,8 @@ class MaxEntIRL:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"theta": self.theta.tolist(), "temperature": self.temperature}
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        # 上传模型文件到wandb
-        wandb.save(str(path))
+        # 上传模型文件到 wandb（若可用）
+        _wandb_save(str(path))
 
     def load(self, path: Path) -> None:
         payload = json.loads(path.read_text("utf-8"))
@@ -219,4 +276,4 @@ if __name__ == "__main__":
     args = build_argparser().parse_args()
     train(args)
     # 训练完成后，关闭 wandb 记录
-    wandb.finish()
+    _wandb_finish()

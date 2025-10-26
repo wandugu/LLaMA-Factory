@@ -1,19 +1,37 @@
-model_name_or_path: outputs/qwen-4b-mypretrain
+model_name_or_path: /root/autodl-tmp/qwen-4b-maven-sft-merged
 stage: ppo
-datasets:
-  - path: data/processed/rl_prompts.jsonl
-output_dir: outputs/qwen-4b-rl
+
+# 数据集设置
+finetuning_type: lora
+dataset: maven_rl
+dataset_dir: data/processed
+template: qwen
+
+do_train: true
+output_dir: /root/autodl-tmp/qwen-4b-maven-sft-merged/qwen-4b-maven-rl
 per_device_train_batch_size: 2
-ppo_epochs: 4
+gradient_accumulation_steps: 4
+num_train_epochs: 1
 learning_rate: 1.0e-6
-kl_coef: 0.02
-clip_range: 0.2
-target_kl: 0.1
-bf16: true
-report_to: none
-plugins:
-  reward_callback: skirl_maxent
-reward_args:
-  reward_ckpt: outputs/qwen-4b-rm/reward.ckpt
+ppo_epochs: 4
+ppo_target: 0.1
+ppo_whiten_rewards: false
+bf16: false
+logging_steps: 10
+save_steps: 200
+overwrite_output_dir: true
+
+# 奖励回调
+reward_model_type: callback
+reward_callback: skirl_maxent
+reward_callback_args:
+  reward_ckpt: /root/autodl-tmp/qwen-4b-maven-rm/reward.ckpt
+  trajectory_path: data/processed/traj.jsonl
   alpha: 0.6
-  reward_clip: [-5.0, 5.0]
+  reward_clip:
+    - -5.0
+    - 5.0
+
+# wandb 设置（可改为 none 禁用）
+report_to: wandb
+run_name: maven_rl

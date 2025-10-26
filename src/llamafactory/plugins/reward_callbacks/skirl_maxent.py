@@ -28,7 +28,8 @@ class SkirlMaxentRewardCallback:
     ) -> None:
         self.model = MaxEntIRL()
         self.model.load(Path(reward_ckpt))
-        self.trajectories = self._load_trajectories(trajectory_path or Path("data/processed/traj.jsonl"))
+        traj_path = Path(trajectory_path) if trajectory_path is not None else Path("data/processed/traj.jsonl")
+        self.trajectories = self._load_trajectories(traj_path)
         self.alpha = alpha
         self.reward_clip = reward_clip
         self.normalizer = normalizer

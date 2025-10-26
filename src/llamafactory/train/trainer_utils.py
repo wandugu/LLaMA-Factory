@@ -168,6 +168,13 @@ def create_reward_model(
         )
         logger.info_rank0(f"Loaded adapter weights of reward model from {finetuning_args.reward_model}")
         return None
+    elif finetuning_args.reward_model_type == "callback":
+        logger.info_rank0(
+            "Use reward callback %s with args %s",
+            finetuning_args.reward_callback,
+            finetuning_args.reward_callback_args,
+        )
+        return None
     else:
         reward_model_args = ModelArguments.copyfrom(
             model_args,
