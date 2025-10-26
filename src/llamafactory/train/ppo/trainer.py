@@ -65,6 +65,14 @@ logger = logging.get_logger(__name__)
 class CustomPPOTrainer(PPOTrainer, Trainer):
     r"""Inherit PPOTrainer."""
 
+    @property
+    def tokenizer(self):  # type: ignore[override]
+        return getattr(self, "processing_class", None)
+
+    @tokenizer.setter
+    def tokenizer(self, value):  # type: ignore[override]
+        self.processing_class = value
+
     def __init__(
         self,
         model_args: "ModelArguments",

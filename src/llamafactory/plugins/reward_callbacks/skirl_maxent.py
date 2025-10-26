@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -69,6 +70,32 @@ class SkirlMaxentRewardCallback:
         lo, hi = self.reward_clip
         return [float(np.clip(v, lo, hi)) for v in values]
 
+    @staticmethod
+    def _resolve_trajectory_id(meta: Optional[Dict]) -> Optional[str]:
+        if not isinstance(meta, dict):
+            return None
+
+        for key in ("trajectory_id", "trajectoryId", "trajectory", "traj_id", "trajId"):
+            value = meta.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        prompt_like = meta.get("prompt") or meta.get("raw_prompt") or meta.get("input")
+        if isinstance(prompt_like, str):
+            match = re.search(r"\[TRAJ\]\s*([^\s]+)", prompt_like)
+            if match:
+                return match.group(1)
+
+        history = meta.get("history")
+        if isinstance(history, list):
+            for item in history:
+                if isinstance(item, str):
+                    match = re.search(r"\[TRAJ\]\s*([^\s]+)", item)
+                    if match:
+                        return match.group(1)
+
+        return None
+
     def score_batch(
         self,
         metas: Sequence[Dict],
@@ -76,10 +103,13 @@ class SkirlMaxentRewardCallback:
     ) -> List[float]:
         rewards: List[float] = []
         for meta in metas:
-            trajectory_id = meta.get("trajectory_id") if isinstance(meta, dict) else None
+            trajectory_id = self._resolve_trajectory_id(meta)
             trajectory = self.trajectories.get(trajectory_id)
             if trajectory is None:
-                LOGGER.warning("trajectory %s 未在缓存中找到，回退为零奖励", trajectory_id)
+                meta_keys = sorted(meta.keys()) if isinstance(meta, dict) else "<non-dict>"
+                LOGGER.warning(
+                    "trajectory %s 未在缓存中找到，回退为零奖励 (meta keys=%s)", trajectory_id, meta_keys
+                )
                 rewards.append(0.0)
                 continue
             try:
