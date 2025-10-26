@@ -372,14 +372,26 @@ class SkirlRLDatasetConverter(AlpacaDatasetConverter):
     """在 Alpaca 格式基础上附加 `_meta` 信息，供外部奖励回调使用。"""
 
     def __call__(self, example: dict[str, Any]) -> dict[str, Any]:
-        output = super().__call__(example)
-        meta = example.get("_meta")
-        if not isinstance(meta, dict):
-            meta = {}
-            for key in ("trajectory_id", "person_id"):
-                if key in example:
-                    meta[key] = example[key]
+        # 先提取我们关心的元信息，避免父类转换过程中意外丢失字段。
+        raw_meta = example.get("_meta")
+        meta: dict[str, Any] = dict(raw_meta) if isinstance(raw_meta, dict) else {}
 
+        def _extract_value(keys: tuple[str, ...]) -> Optional[str]:
+            for key in keys:
+                value = example.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return None
+
+        trajectory_id = _extract_value(("trajectory_id", "trajectoryId", "trajectory", "traj_id", "trajId"))
+        if trajectory_id is not None:
+            meta.setdefault("trajectory_id", trajectory_id)
+
+        person_id = _extract_value(("person_id", "personId", "person", "doc_id", "document_id"))
+        if person_id is not None:
+            meta.setdefault("person_id", person_id)
+
+        output = super().__call__(example)
         output["_meta"] = meta
         return output
 
