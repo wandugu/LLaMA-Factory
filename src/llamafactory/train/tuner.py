@@ -64,6 +64,10 @@ def _training_function(config: dict[str, Any]) -> None:
     if finetuning_args.early_stopping_steps is not None:
         callbacks.append(EarlyStoppingCallback(early_stopping_patience=finetuning_args.early_stopping_steps))
 
+    if training_args.report_to and "wandb" in training_args.report_to:
+        if training_args.run_name and os.getenv("WANDB_NAME") is None:
+            os.environ["WANDB_NAME"] = training_args.run_name
+
     callbacks.append(ReporterCallback(model_args, data_args, finetuning_args, generating_args))  # add to last
 
     if finetuning_args.stage == "pt":

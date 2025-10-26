@@ -360,6 +360,15 @@ class ReporterCallback(TrainerCallback):
         if "wandb" in args.report_to:
             import wandb
 
+            if args.run_name:
+                run = getattr(wandb, "run", None)
+                if run is not None:
+                    run.name = args.run_name  # type: ignore[assignment]
+                    try:
+                        run.save()
+                    except Exception:  # noqa: BLE001 - wandb may be absent or offline
+                        pass
+
             wandb.config.update(
                 {
                     "model_args": self.model_args.to_dict(),

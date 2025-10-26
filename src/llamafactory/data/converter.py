@@ -385,11 +385,15 @@ class SkirlRLDatasetConverter(AlpacaDatasetConverter):
 
         trajectory_id = _extract_value(("trajectory_id", "trajectoryId", "trajectory", "traj_id", "trajId"))
         if trajectory_id is not None:
-            meta.setdefault("trajectory_id", trajectory_id)
+            meta["trajectory_id"] = trajectory_id
 
         person_id = _extract_value(("person_id", "personId", "person", "doc_id", "document_id"))
         if person_id is not None:
-            meta.setdefault("person_id", person_id)
+            meta["person_id"] = person_id
+
+        prompt_text = example.get(self.dataset_attr.prompt) if self.dataset_attr.prompt else None
+        if isinstance(prompt_text, str) and prompt_text.strip():
+            meta.setdefault("prompt", prompt_text)
 
         output = super().__call__(example)
         output["_meta"] = meta

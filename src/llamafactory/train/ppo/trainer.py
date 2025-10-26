@@ -18,6 +18,7 @@
 import math
 import os
 import sys
+import textwrap
 import warnings
 from collections.abc import Iterator
 from types import MethodType
@@ -491,6 +492,23 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             meta_list = metas or [None for _ in queries]
             formatted_metas = [m if isinstance(m, dict) else {} for m in meta_list]
             sequences = [torch.cat((q, r), dim=-1).tolist() for q, r in zip(queries, responses)]
+            if self.tokenizer is not None:
+                prompt_texts = self.tokenizer.batch_decode([q.tolist() for q in queries], skip_special_tokens=True)
+                response_texts = self.tokenizer.batch_decode(
+                    [r.tolist() for r in responses], skip_special_tokens=True
+                )
+                for meta, prompt_text, response_text in zip(formatted_metas, prompt_texts, response_texts):
+                    trajectory_id = meta.get("trajectory_id") if isinstance(meta, dict) else None
+                    summary_prompt = textwrap.shorten(prompt_text.strip().replace("\n", " "), width=400, placeholder="…")
+                    summary_response = textwrap.shorten(
+                        response_text.strip().replace("\n", " "), width=400, placeholder="…"
+                    )
+                    logger.info_rank0(
+                        "[PPO] 轨迹=%s\n  问题: %s\n  回复: %s",
+                        trajectory_id or "<unknown>",
+                        summary_prompt or "<empty>",
+                        summary_response or "<empty>",
+                    )
             try:
                 rewards = self.reward_callback(
                     sequences=sequences,
