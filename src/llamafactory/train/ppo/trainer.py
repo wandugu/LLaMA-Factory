@@ -17,6 +17,7 @@
 
 import math
 import os
+import re
 import sys
 import textwrap
 import warnings
@@ -498,6 +499,12 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                     [r.tolist() for r in responses], skip_special_tokens=True
                 )
                 for meta, prompt_text, response_text in zip(formatted_metas, prompt_texts, response_texts):
+                    if isinstance(meta, dict):
+                        meta.setdefault("prompt", prompt_text)
+                        if "trajectory_id" not in meta:
+                            match = re.search(r"\[TRAJ\]\s*([^\s]+)", prompt_text)
+                            if match:
+                                meta["trajectory_id"] = match.group(1)
                     trajectory_id = meta.get("trajectory_id") if isinstance(meta, dict) else None
                     summary_prompt = textwrap.shorten(prompt_text.strip().replace("\n", " "), width=400, placeholder="…")
                     summary_response = textwrap.shorten(

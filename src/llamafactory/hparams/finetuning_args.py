@@ -409,6 +409,25 @@ class BAdamArgument:
 
 
 @dataclass
+class WandbArguments:
+    wandb_project: Optional[str] = field(
+        default=None,
+        metadata={"help": "Project name used when initializing Weights & Biases."},
+    )
+    wandb_entity: Optional[str] = field(
+        default=None,
+        metadata={"help": "Entity (team or user) used for Weights & Biases logging."},
+    )
+    wandb_tags: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Comma separated tag string for Weights & Biases runs."
+            " Leave empty to rely on environment variables.",
+        },
+    )
+
+
+@dataclass
 class SwanLabArguments:
     use_swanlab: bool = field(
         default=False,
@@ -450,6 +469,7 @@ class SwanLabArguments:
 
 @dataclass
 class FinetuningArguments(
+    WandbArguments,
     SwanLabArguments,
     BAdamArgument,
     ApolloArguments,
