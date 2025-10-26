@@ -59,6 +59,7 @@ class UnsupervisedDatasetProcessor(DatasetProcessor):
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         # build inputs with format `<bos> X` and labels with format `Y <eos>`
         model_inputs = defaultdict(list)
+        has_meta = "_meta" in examples
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1:
                 logger.warning_rank0(
@@ -81,6 +82,8 @@ class UnsupervisedDatasetProcessor(DatasetProcessor):
             model_inputs["images"].append(examples["_images"][i])
             model_inputs["videos"].append(examples["_videos"][i])
             model_inputs["audios"].append(examples["_audios"][i])
+            if has_meta:
+                model_inputs["metas"].append(examples["_meta"][i])
 
         return model_inputs
 

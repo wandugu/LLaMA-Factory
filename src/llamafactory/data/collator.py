@@ -108,10 +108,12 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
         batch_images, batch_videos, batch_audios = [], [], []
         batch_imglens, batch_vidlens, batch_audlens, batch_input_ids = [], [], [], []
+        batch_metas = []
         for feature in features:
             images = feature.pop("images", None) or []
             videos = feature.pop("videos", None) or []
             audios = feature.pop("audios", None) or []
+            batch_metas.append(feature.pop("metas", None))
             batch_images.extend(images)
             batch_videos.extend(videos)
             batch_audios.extend(audios)
@@ -181,6 +183,8 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                 feature["token_type_ids"] = token_type_ids[i]
 
         features: dict[str, torch.Tensor] = super().__call__(features)
+        if batch_metas and any(meta is not None for meta in batch_metas):
+            features["metas"] = batch_metas
 
         if self.get_rope_func is not None:
             rope_index_kwargs = {

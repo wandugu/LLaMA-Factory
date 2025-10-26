@@ -202,6 +202,12 @@ def write_jsonl(path: Path, records: Iterable[BaseModel]) -> DatasetStats:
                 payload = item.model_dump(exclude_none=True)
             else:
                 payload = item
+            if path.name == "rl_prompts.jsonl":
+                meta = {
+                    "trajectory_id": payload.get("trajectory_id"),
+                    "person_id": payload.get("person_id"),
+                }
+                payload["_meta"] = {k: v for k, v in meta.items() if v is not None}
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
     extra: Dict[str, object] = {}
     if path.name == "event.jsonl":
@@ -1207,7 +1213,15 @@ def write_dataset_info(dst: Path) -> None:
                 "system": "system",
                 "history": "history",
             },
-        }
+        },
+        "maven_rl": {
+            "file_name": "rl_prompts.jsonl",
+            "formatting": "skirl_rl",
+            "columns": {
+                "prompt": "prompt",
+                "response": "response",
+            },
+        },
     }
     dataset_info_path.write_text(
         json.dumps(dataset_info, ensure_ascii=False, indent=2), encoding="utf-8"

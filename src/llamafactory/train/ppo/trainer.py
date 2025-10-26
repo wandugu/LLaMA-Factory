@@ -20,7 +20,7 @@ import os
 import sys
 import warnings
 from types import MethodType
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 import torch
 from accelerate.utils import DistributedDataParallelKwargs
@@ -77,6 +77,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         tokenizer: "PreTrainedTokenizer",
         processor: Optional["ProcessorMixin"],
         data_collator: "DataCollatorWithPadding",
+        reward_callback: Optional[Callable[..., Sequence[float]]] = None,
         train_dataset: Optional["Dataset"] = None,
         eval_dataset: Optional["Dataset"] = None,
     ) -> None:
@@ -141,6 +142,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         self.model_args = model_args
         self.finetuning_args = finetuning_args
         self.reward_model = reward_model
+        self.reward_callback = reward_callback
         self.current_device = get_current_device()  # patch for deepspeed training
 
         self.generation_config = GenerationConfig(
@@ -239,17 +241,22 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             # Get inputs
             self.model.eval()
             self.tokenizer.padding_side = "right"  # change padding side
-            queries, responses, rewards = [], [], []
-            for idx in range(0, self.config.batch_size, self.config.mini_batch_size):
-                mini_batch = {
-                    "input_ids": batch["input_ids"][idx : idx + self.config.mini_batch_size],
-                    "attention_mask": batch["attention_mask"][idx : idx + self.config.mini_batch_size],
-                }
-                mini_batch_queries, mini_batch_responses = self.get_inputs(mini_batch)
-                mini_batch_rewards = self.get_rewards(mini_batch_queries, mini_batch_responses)
-                queries.extend(mini_batch_queries)
-                responses.extend(mini_batch_responses)
-                rewards.extend(mini_batch_rewards)
+        queries, responses, rewards, metas = [], [], [], []
+        for idx in range(0, self.config.batch_size, self.config.mini_batch_size):
+            mini_batch = {
+                "input_ids": batch["input_ids"][idx : idx + self.config.mini_batch_size],
+                "attention_mask": batch["attention_mask"][idx : idx + self.config.mini_batch_size],
+            }
+            if "metas" in batch:
+                mini_batch["metas"] = batch["metas"][idx : idx + self.config.mini_batch_size]
+            mini_batch_queries, mini_batch_responses, mini_batch_metas = self.get_inputs(mini_batch)
+            mini_batch_rewards = self.get_rewards(
+                mini_batch_queries, mini_batch_responses, metas=mini_batch_metas
+            )
+            queries.extend(mini_batch_queries)
+            responses.extend(mini_batch_responses)
+            rewards.extend(mini_batch_rewards)
+            metas.extend(mini_batch_metas)
 
             # Run PPO step
             self.model.train()
@@ -335,12 +342,16 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         return lr_scheduler
 
     @torch.no_grad()
-    def get_inputs(self, batch: dict[str, "torch.Tensor"]) -> tuple[list["torch.Tensor"], list["torch.Tensor"]]:
+    def get_inputs(
+        self, batch: dict[str, Any]
+    ) -> tuple[list["torch.Tensor"], list["torch.Tensor"], list[Optional[Any]]]:
         r"""Generate model's responses given queries."""
+        metas = batch.get("metas")
         if batch["input_ids"].size(0) == 1:  # handle llama2 ppo with gradient accumulation > 1
             start_index = (batch["input_ids"][0] != self.tokenizer.pad_token_id).nonzero()[0].item()
-            for k, v in batch.items():
-                batch[k] = v[:, start_index:]
+            for k, v in list(batch.items()):
+                if isinstance(v, torch.Tensor):
+                    batch[k] = v[:, start_index:]
 
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
@@ -370,18 +381,45 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             queries.append(query[i, query_start_index:])  # remove padding from left
             responses.append(response[i, :response_length])  # remove padding from right
 
-        return queries, responses
+        if isinstance(metas, list):
+            meta_list: list[Optional[Any]] = metas
+        else:
+            meta_list = [None for _ in queries]
+
+        return queries, responses, meta_list
 
     @torch.no_grad()
     def get_rewards(
         self,
         queries: list["torch.Tensor"],
         responses: list["torch.Tensor"],
+        metas: Optional[list[Optional[Any]]] = None,
     ) -> list["torch.Tensor"]:
         r"""Compute scores using given reward model.
 
         Both inputs and outputs are put on CPU.
         """
+        if self.reward_callback is not None:
+            meta_list = metas or [None for _ in queries]
+            formatted_metas = [m if isinstance(m, dict) else {} for m in meta_list]
+            sequences = [torch.cat((q, r), dim=-1).tolist() for q, r in zip(queries, responses)]
+            try:
+                rewards = self.reward_callback(
+                    sequences=sequences,
+                    metas=formatted_metas,
+                    logprobs=None,
+                )
+            except TypeError:
+                rewards = self.reward_callback(sequences, formatted_metas)  # type: ignore[misc]
+
+            tensors: list[torch.Tensor] = []
+            for reward in rewards:
+                if isinstance(reward, torch.Tensor):
+                    tensors.append(reward.detach().to(torch.float32))
+                else:
+                    tensors.append(torch.tensor(float(reward), dtype=torch.float32))
+            return tensors
+
         if self.finetuning_args.reward_model_type == "api":
             token_ids = [torch.cat((q, r), dim=-1).tolist() for q, r in zip(queries, responses)]
             messages = self.tokenizer.batch_decode(token_ids, skip_special_tokens=False)
