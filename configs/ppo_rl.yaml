@@ -35,3 +35,5 @@ reward_callback_args:
 # wandb 设置（可改为 none 禁用）
 report_to: wandb
 run_name: maven_rl
+wandb_project: maven-irl
+wandb_tags: ppo,qwen3-4b,maven

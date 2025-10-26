@@ -13,6 +13,7 @@ wandb online >/dev/null 2>&1 || true
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CONFIG_PATH="${ROOT_DIR}/configs/pretrain_maven.yaml"
+EXPORT_CONFIG="${ROOT_DIR}/configs/export_qwen_maven_sft.yaml"
 
 echo "$CONFIG_PATH"; test -f "$CONFIG_PATH"
 
@@ -34,4 +35,11 @@ fi
 
 echo "[INFO] 启动 maven sft"
 llamafactory-cli train "${CONFIG_PATH}"
+
+if [ -f "${EXPORT_CONFIG}" ]; then
+  echo "[INFO] 合并 LoRA 权重生成全量模型"
+  llamafactory-cli export "${EXPORT_CONFIG}"
+else
+  echo "[WARN] 未找到导出配置 ${EXPORT_CONFIG}，跳过合并步骤"
+fi
 
