@@ -11,14 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""MCA (mcore_adapter) workflows for PT/SFT/DPO stages, aligned with LLaMA-Factory's workflow style."""
-
-from __future__ import annotations
 
 import functools
 from collections.abc import Sequence
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
+
+from transformers import DataCollatorForSeq2Seq
 
 from ...data import (
     SFTDataCollatorWith4DAttentionMask,
@@ -44,11 +43,11 @@ from mcore_adapter.models import AutoConfig, AutoModel
 from mcore_adapter.trainer import DPOTrainer as McaDPOTrainer
 from mcore_adapter.trainer import McaTrainer
 from mcore_adapter.trainer.dpo_config import DPOConfig
-from mcore_adapter.training_args import Seq2SeqTrainingArguments as McaSeq2SeqTrainingArguments
 
 
 if TYPE_CHECKING:
-    from transformers import DataCollatorForSeq2Seq, TrainerCallback
+    from mcore_adapter.training_args import Seq2SeqTrainingArguments as McaSeq2SeqTrainingArguments
+    from transformers import TrainerCallback
 
     from ...hparams import DataArguments, FinetuningArguments, ModelArguments
 
@@ -75,18 +74,23 @@ def _data_collator_wrapper(data_collator: Any):
 
     return wrapper
 
-def _check_model_support(model_args: ModelArguments):
+
+def _check_model_support(model_args: "ModelArguments"):
     from transformers import AutoConfig as HfAutoConfig
-    config = HfAutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code)
+
+    config = HfAutoConfig.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
     if config.model_type not in MCA_SUPPORTED_MODELS:
         raise ValueError(f"Model {config.model_type} is not supported by MCA.")
 
+
 def run_pt(
-    model_args: ModelArguments,
-    data_args: DataArguments,
-    training_args: McaSeq2SeqTrainingArguments,
-    finetuning_args: FinetuningArguments,
-    callbacks: list[TrainerCallback] | None = None,
+    model_args: "ModelArguments",
+    data_args: "DataArguments",
+    training_args: "McaSeq2SeqTrainingArguments",
+    finetuning_args: "FinetuningArguments",
+    callbacks: Optional[list["TrainerCallback"]] = None,
 ):
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
@@ -99,10 +103,7 @@ def run_pt(
 
     _check_model_support(model_args)
     model = AutoModel.from_pretrained(model_args.model_name_or_path, training_args)
-
-    from transformers import DataCollatorForSeq2Seq
-
-    data_collator: DataCollatorForSeq2Seq = DataCollatorForSeq2Seq(
+    data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         pad_to_multiple_of=8,
         label_pad_token_id=IGNORE_INDEX,
@@ -137,11 +138,11 @@ def run_pt(
 
 
 def run_sft(
-    model_args: ModelArguments,
-    data_args: DataArguments,
-    training_args: McaSeq2SeqTrainingArguments,
-    finetuning_args: FinetuningArguments,
-    callbacks: list[TrainerCallback] | None = None,
+    model_args: "ModelArguments",
+    data_args: "DataArguments",
+    training_args: "McaSeq2SeqTrainingArguments",
+    finetuning_args: "FinetuningArguments",
+    callbacks: Optional[list["TrainerCallback"]] = None,
 ):
     # align packing flags
     # TODO: FIX SequencePacking
@@ -161,22 +162,23 @@ def run_sft(
     model = AutoModel.from_pretrained(model_args.model_name_or_path, training_args)
 
     # optional freezing for qwen2_vl, qwen2_5_vl
-    if getattr(model.config, "hf_model_type", None) in ["qwen2_vl", "qwen2_5_vl"] and finetuning_args.freeze_vision_tower:
-        for name, p in model.named_parameters():
-            if any(name.startswith(k) for k in ["vision_model.blocks", "vision_model.patch_embed"]):
-                p.requires_grad_(False)
-    if getattr(model.config, "hf_model_type", None) in ["qwen2_vl", "qwen2_5_vl"] and finetuning_args.freeze_multi_modal_projector:
-        for name, p in model.named_parameters():
-            if any(name.startswith(k) for k in ["multi_modal_projector"]):
-                p.requires_grad_(False)
-    if getattr(model.config, "hf_model_type", None) in ["qwen2_vl", "qwen2_5_vl"] and finetuning_args.freeze_language_model:
-        for name, p in model.named_parameters():
-            if any(name.startswith(k) for k in ["embedding", "decoder", "output_layer"]):
-                p.requires_grad_(False)
+    if getattr(model.config, "hf_model_type", None) in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"]:
+        params_to_freeze = []
+        if finetuning_args.freeze_vision_tower:
+            params_to_freeze.extend(["vision_model.blocks", "vision_model.patch_embed"])
 
-    pad_to_max = (
-        training_args.expert_model_parallel_size is not None and training_args.expert_model_parallel_size > 1
-    )
+        if finetuning_args.freeze_multi_modal_projector:
+            params_to_freeze.extend(["multi_modal_projector"])
+
+        if finetuning_args.freeze_language_model:
+            params_to_freeze.extend(["embedding", "decoder", "output_layer"])
+
+        if params_to_freeze:
+            for name, p in model.named_parameters():
+                if any(name.startswith(k) for k in params_to_freeze):
+                    p.requires_grad_(False)
+
+    pad_to_max = training_args.expert_model_parallel_size is not None and training_args.expert_model_parallel_size > 1
     data_collator = SFTDataCollatorWith4DAttentionMask(
         template=template,
         padding="max_length" if pad_to_max else "longest",
@@ -214,11 +216,11 @@ def run_sft(
 
 
 def run_dpo(
-    model_args: ModelArguments,
-    data_args: DataArguments,
-    training_args: McaSeq2SeqTrainingArguments,
-    finetuning_args: FinetuningArguments,
-    callbacks: list[TrainerCallback] | None = None,
+    model_args: "ModelArguments",
+    data_args: "DataArguments",
+    training_args: "McaSeq2SeqTrainingArguments",
+    finetuning_args: "FinetuningArguments",
+    callbacks: Optional[list["TrainerCallback"]] = None,
 ):
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
@@ -239,9 +241,7 @@ def run_dpo(
     dataset_module = get_dataset(template, model_args, data_args, training_args, stage="rm", **tokenizer_module)
     data_args.cutoff_len -= 1
 
-    pad_to_max = (
-        training_args.expert_model_parallel_size is not None and training_args.expert_model_parallel_size > 1
-    )
+    pad_to_max = training_args.expert_model_parallel_size is not None and training_args.expert_model_parallel_size > 1
     dpo_config = DPOConfig(
         beta=finetuning_args.pref_beta,
         pref_loss=finetuning_args.pref_loss,
@@ -289,4 +289,3 @@ def run_dpo(
             keys += ["eval_loss"]
 
         plot_loss(training_args.output_dir, keys=keys)
-
