@@ -476,6 +476,17 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         else:
             meta_list = [None for _ in queries]
 
+        if logger.isEnabledFor(logging.INFO):
+            for idx, (query_ids, response_ids) in enumerate(zip(queries, responses)):
+                prompt_text = self.tokenizer.decode(query_ids, skip_special_tokens=True)
+                response_text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
+                logger.info_rank0(
+                    "PPO 样本 %d\n[Prompt]\n%s\n[Response]\n%s",
+                    idx,
+                    prompt_text.strip() or "<empty>",
+                    response_text.strip() or "<empty>",
+                )
+
         return queries, responses, meta_list
 
     @torch.no_grad()

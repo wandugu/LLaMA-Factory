@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export WANDB_PROJECT="maven-irl"
-export WANDB_MODE="online"              # offline/online
+export WANDB_PROJECT="${WANDB_PROJECT:-maven-irl}"
+export WANDB_MODE="${WANDB_MODE:-online}"              # offline/online
 # 可选：团队与标签
 # export WANDB_ENTITY="your_team"
-export WANDB_TAGS="sft,qwen3-4b,maven"
+export WANDB_TAGS="${WANDB_TAGS:-sft,qwen3-4b,maven}"
 
 # 屏蔽 transformers 的冗余 WARNING，保持训练日志整洁
 export TRANSFORMERS_VERBOSITY="error"
@@ -18,7 +18,7 @@ REWARD_CKPT="/root/autodl-tmp/qwen-4b-maven-rm/reward.ckpt"
 OUTPUT_DIR="/root/autodl-tmp/qwen-4b-rl"
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
-MODEL_PATH=$(python - <<'PY' "${CONFIG_PATH}" "${ROOT_DIR}"
+readarray -t __SKIRL_CONFIG_INFO < <(python - <<'PY' "${CONFIG_PATH}" "${ROOT_DIR}"
 import sys
 from pathlib import Path
 
@@ -27,16 +27,27 @@ import yaml
 config_path = Path(sys.argv[1])
 root = Path(sys.argv[2])
 config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
 model_path = config.get("model_name_or_path", "")
-if not model_path:
-    print("")
-else:
+if model_path:
     path = Path(model_path)
     if not path.is_absolute():
         path = (root / path).resolve()
     print(path)
+else:
+    print("")
+
+print(config.get("run_name", ""))
 PY
 )
+
+MODEL_PATH="${__SKIRL_CONFIG_INFO[0]}"
+CONFIG_RUN_NAME="${__SKIRL_CONFIG_INFO[1]}"
+unset __SKIRL_CONFIG_INFO
+
+if [ -n "${CONFIG_RUN_NAME}" ] && [ -z "${WANDB_NAME:-}" ]; then
+  export WANDB_NAME="${CONFIG_RUN_NAME}"
+fi
 
 
 

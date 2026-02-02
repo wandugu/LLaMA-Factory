@@ -396,6 +396,17 @@ class SkirlRLDatasetConverter(AlpacaDatasetConverter):
             meta.setdefault("prompt", prompt_text)
 
         output = super().__call__(example)
+        raw_prompt = example.get(self.dataset_attr.prompt) if self.dataset_attr.prompt else None
+        raw_query = example.get(self.dataset_attr.query) if self.dataset_attr.query else None
+        raw_response = example.get(self.dataset_attr.response) if self.dataset_attr.response else None
+
+        if isinstance(raw_prompt, str) and raw_prompt.strip():
+            meta.setdefault("raw_prompt", raw_prompt.strip())
+        if isinstance(raw_query, str) and raw_query.strip():
+            meta.setdefault("raw_query", raw_query.strip())
+        if isinstance(raw_response, str) and raw_response.strip():
+            meta.setdefault("reference_response", raw_response.strip())
+
         output["_meta"] = meta
         return output
 
