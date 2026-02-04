@@ -26,3 +26,21 @@ run:
   k: 10
   alpha: 0.6
   auto_sample: true
+
+stats:
+  dataset_dir: data/processed
+  output_path: outputs/dataset_stats.json
+  dataset_files:
+    - event.jsonl
+    - traj.jsonl
+    - pairs.jsonl
+    - maven_sft.jsonl
+    - rl_prompts.jsonl
+  auto_sample: true
+  max_examples: 2
+  sample_dir: outputs/samples
+  sample_traj_path: outputs/samples/traj.jsonl
+  sample_event_path: outputs/samples/event.jsonl
+  sample_pairs_path: outputs/samples/pairs.jsonl
+  sample_sft_path: outputs/samples/maven_sft.jsonl
+  sample_rl_prompts_path: outputs/samples/rl_prompts.jsonl
