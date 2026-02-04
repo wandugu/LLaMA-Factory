@@ -65,6 +65,15 @@ skirl_rl/
 
    输出 `outputs/qwen-4b-rl/topk.json` 与 `reasons.jsonl`，可选 `--eval` 计算 `NDCG@K/MAP@K/Hit@K`。
 
+6. **SKEIN 表格评估（Top-10 指标）**
+
+   ```bash
+   python skirl_rl/evaluate_skein.py
+   ```
+
+   默认读取 `skirl_rl/config.yaml` 的 `run` 配置，按数据集与 profile 组合输出 `evaluation_*.json`、`topk_*.json` 与 `reasons_*.jsonl`。
+   若本地缺少轨迹或奖励模型，会自动生成一条合成样本用于跑通流程（可在 `run.auto_sample` 中控制）。
+
 ## 注意事项
 
 - `src/llamafactory/plugins/reward_callbacks/skirl_maxent.py` 提供 PPO/GRPO 外部奖励回调。
