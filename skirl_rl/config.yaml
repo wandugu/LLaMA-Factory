@@ -1,0 +1,28 @@
+defaults:
+  k: 10
+  alpha: 0.6
+  output_dir: outputs/qwen-4b-rl
+  reward_ckpt: outputs/qwen-4b-rm/reward.ckpt
+  policy_logprobs: outputs/qwen-4b-rl/policy_logprobs.json
+  traj_path: data/processed/traj.jsonl
+  auto_sample: true
+  sample_dir: outputs/samples
+  sample_traj_path: outputs/samples/traj.jsonl
+  sample_reward_ckpt: outputs/samples/reward.ckpt
+  sample_policy_logprobs: outputs/samples/policy_logprobs.json
+
+datasets:
+  MAVEN-ERE:
+    traj_path: data/processed/traj.jsonl
+  RAMS:
+    traj_path: data/processed/rams_traj.jsonl
+
+profiles:
+  base: {}
+
+run:
+  datasets: MAVEN-ERE
+  profiles: base
+  k: 10
+  alpha: 0.6
+  auto_sample: true
