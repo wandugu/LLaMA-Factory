@@ -94,6 +94,16 @@ def _text_debug_stats(text: str) -> dict[str, int]:
     return stats
 
 
+def _token_debug_snapshot(tokenizer: "PreTrainedTokenizer", token_ids: list[int], max_tokens: int = 24) -> str:
+    head_ids = token_ids[:max_tokens]
+    head_tokens = tokenizer.convert_ids_to_tokens(head_ids)
+    paired = [f"{tid}:{repr(tok)}" for tid, tok in zip(head_ids, head_tokens)]
+    if len(token_ids) > max_tokens:
+        paired.append("…")
+
+    return " | ".join(paired)
+
+
 class CustomPPOTrainer(PPOTrainer, Trainer):
     r"""Inherit PPOTrainer."""
 
@@ -191,6 +201,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             eos_token_id=[self.tokenizer.eos_token_id] + self.tokenizer.additional_special_tokens_ids,
             **generating_args.to_dict(),
         )
+        self._log_generation_diagnostics()
 
         self.state = TrainerState()
         self.control = TrainerControl()
@@ -228,6 +239,47 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
 
             self.accelerator.clip_grad_norm_ = MethodType(clip_grad_norm_old_version, self.accelerator)
             self.add_callback(BAdamCallback)
+
+    def _log_generation_diagnostics(self) -> None:
+        eos_ids = self.generation_config.eos_token_id
+        if not isinstance(eos_ids, list):
+            eos_ids = [eos_ids]
+
+        logger.info_rank0(
+            "PPO generation config: do_sample=%s temperature=%s top_p=%s top_k=%s repetition_penalty=%s max_new_tokens=%s",
+            self.generation_config.do_sample,
+            self.generation_config.temperature,
+            self.generation_config.top_p,
+            self.generation_config.top_k,
+            self.generation_config.repetition_penalty,
+            self.generation_config.max_new_tokens,
+        )
+        logger.debug_rank0(
+            "PPO tokenizer ids: pad=%s bos=%s eos=%s additional_special_tokens=%s",
+            self.tokenizer.pad_token_id,
+            self.tokenizer.bos_token_id,
+            self.tokenizer.eos_token_id,
+            self.tokenizer.additional_special_tokens_ids,
+        )
+
+        if not self.generation_config.do_sample and any(
+            value is not None
+            for value in [
+                self.generation_config.temperature,
+                self.generation_config.top_p,
+                self.generation_config.top_k,
+            ]
+        ):
+            logger.warning_rank0(
+                "PPO rollout 当前 do_sample=False，temperature/top_p/top_k 将被忽略。若想增加多样性，请显式设置 do_sample=True。"
+            )
+
+        if self.tokenizer.eos_token_id not in eos_ids:
+            logger.warning_rank0(
+                "tokenizer.eos_token_id=%s 不在 generation eos_token_id=%s 中，可能导致生成过长或无法按预期停止。",
+                self.tokenizer.eos_token_id,
+                eos_ids,
+            )
 
     def ppo_train(self, resume_from_checkpoint: Optional[str] = None) -> None:
         r"""Implement training loop for the PPO stage, like _inner_training_loop() in Huggingface's Trainer."""
@@ -548,7 +600,9 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 response_texts = self.tokenizer.batch_decode(
                     [r.tolist() for r in responses], skip_special_tokens=True
                 )
-                for meta, prompt_text, response_text in zip(formatted_metas, prompt_texts, response_texts):
+                for meta, prompt_text, response_text, response_ids in zip(
+                    formatted_metas, prompt_texts, response_texts, responses
+                ):
                     if isinstance(meta, dict):
                         meta.setdefault("prompt", prompt_text)
                         if "trajectory_id" not in meta:
@@ -580,8 +634,13 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                     )
                     if response_stats["length"] > 0 and response_stats["cjk"] == 0 and response_stats["latin"] < 8:
                         logger.warning_rank0(
-                            "[PPO] 轨迹=%s 的回复几乎不含中英文字符，可能是采样温度偏高、模板不匹配或底模未对齐。",
+                            "[PPO] 轨迹=%s 的回复几乎不含中英文字符，可能是采样配置、模板不匹配或底模/词表未对齐。",
                             trajectory_id or "<unknown>",
+                        )
+                        logger.debug_rank0(
+                            "[PPO] 轨迹=%s response_token_snapshot: %s",
+                            trajectory_id or "<unknown>",
+                            _token_debug_snapshot(self.tokenizer, response_ids.tolist()),
                         )
             try:
                 rewards = self.reward_callback(

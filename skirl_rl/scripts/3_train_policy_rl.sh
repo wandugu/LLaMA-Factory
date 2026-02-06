@@ -7,6 +7,9 @@ export WANDB_MODE="${WANDB_MODE:-online}"              # offline/online
 # export WANDB_ENTITY="your_team"
 export WANDB_TAGS="${WANDB_TAGS:-sft,qwen3-4b,maven}"
 
+# 默认开启 LlamaFactory DEBUG 日志，便于定位 PPO 生成异常（可通过外部环境变量覆盖）
+export LLAMAFACTORY_VERBOSITY="${LLAMAFACTORY_VERBOSITY:-DEBUG}"
+
 # 屏蔽 transformers 的冗余 WARNING，保持训练日志整洁
 export TRANSFORMERS_VERBOSITY="error"
 export TRANSFORMERS_NO_ADVISORY_WARNINGS="1"
