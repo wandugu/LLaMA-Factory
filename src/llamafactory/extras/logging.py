@@ -67,6 +67,9 @@ class LoggerHandler(logging.Handler):
 class _Logger(logging.Logger):
     r"""A logger that supports rank0 logging."""
 
+    def debug_rank0(self, *args, **kwargs) -> None:
+        self.debug(*args, **kwargs)
+
     def info_rank0(self, *args, **kwargs) -> None:
         self.info(*args, **kwargs)
 
@@ -138,6 +141,11 @@ def remove_handler(handler: logging.Handler) -> None:
     _get_library_root_logger().removeHandler(handler)
 
 
+def debug_rank0(self: "logging.Logger", *args, **kwargs) -> None:
+    if int(os.getenv("LOCAL_RANK", "0")) == 0:
+        self.debug(*args, **kwargs)
+
+
 def info_rank0(self: "logging.Logger", *args, **kwargs) -> None:
     if int(os.getenv("LOCAL_RANK", "0")) == 0:
         self.info(*args, **kwargs)
@@ -154,6 +162,7 @@ def warning_rank0_once(self: "logging.Logger", *args, **kwargs) -> None:
         self.warning(*args, **kwargs)
 
 
+logging.Logger.debug_rank0 = debug_rank0
 logging.Logger.info_rank0 = info_rank0
 logging.Logger.warning_rank0 = warning_rank0
 logging.Logger.warning_rank0_once = warning_rank0_once
