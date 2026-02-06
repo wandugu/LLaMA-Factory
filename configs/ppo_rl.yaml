@@ -5,7 +5,7 @@ stage: ppo
 finetuning_type: lora
 dataset: maven_rl
 dataset_dir: data/processed
-template: qwen3
+template: qwen
 
 # 生成参数（PPO rollout）
 # 乱码排查建议：先关闭采样，确认模型/模板对齐后再逐步放开。
