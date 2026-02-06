@@ -22,6 +22,7 @@ import re
 import sys
 import textwrap
 import warnings
+import unicodedata
 from collections.abc import Iterator
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
@@ -63,6 +64,34 @@ if TYPE_CHECKING:
 
 
 logger = logging.get_logger(__name__)
+
+
+def _text_debug_stats(text: str) -> dict[str, int]:
+    stats = {
+        "length": len(text),
+        "cjk": 0,
+        "latin": 0,
+        "digit": 0,
+        "thai": 0,
+        "arabic": 0,
+        "symbol": 0,
+    }
+    for char in text:
+        code = ord(char)
+        if "\u4e00" <= char <= "\u9fff":
+            stats["cjk"] += 1
+        elif "a" <= char.lower() <= "z":
+            stats["latin"] += 1
+        elif char.isdigit():
+            stats["digit"] += 1
+        elif 0x0E00 <= code <= 0x0E7F:
+            stats["thai"] += 1
+        elif 0x0600 <= code <= 0x06FF:
+            stats["arabic"] += 1
+        elif unicodedata.category(char).startswith("S"):
+            stats["symbol"] += 1
+
+    return stats
 
 
 class CustomPPOTrainer(PPOTrainer, Trainer):
@@ -537,6 +566,23 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                         summary_prompt or "<empty>",
                         summary_response or "<empty>",
                     )
+                    response_stats = _text_debug_stats(response_text)
+                    logger.debug_rank0(
+                        "[PPO] response_stats 轨迹=%s len=%d cjk=%d latin=%d digit=%d thai=%d arabic=%d symbol=%d",
+                        trajectory_id or "<unknown>",
+                        response_stats["length"],
+                        response_stats["cjk"],
+                        response_stats["latin"],
+                        response_stats["digit"],
+                        response_stats["thai"],
+                        response_stats["arabic"],
+                        response_stats["symbol"],
+                    )
+                    if response_stats["length"] > 0 and response_stats["cjk"] == 0 and response_stats["latin"] < 8:
+                        logger.warning_rank0(
+                            "[PPO] 轨迹=%s 的回复几乎不含中英文字符，可能是采样温度偏高、模板不匹配或底模未对齐。",
+                            trajectory_id or "<unknown>",
+                        )
             try:
                 rewards = self.reward_callback(
                     sequences=sequences,
