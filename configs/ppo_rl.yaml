@@ -5,7 +5,7 @@ stage: ppo
 finetuning_type: lora
 dataset: maven_rl
 dataset_dir: data/processed
-template: qwen
+template: qwen3
 
 do_train: true
 output_dir: /root/autodl-tmp/qwen-4b-maven-sft-merged/qwen-4b-maven-rl
