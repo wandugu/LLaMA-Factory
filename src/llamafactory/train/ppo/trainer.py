@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging as py_logging
 import math
 import os
 import re
@@ -443,6 +444,13 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 if isinstance(v, torch.Tensor):
                     batch[k] = v[:, start_index:]
 
+        logger.debug(
+            "Preparing PPO generation batch: input_ids_shape=%s, attention_mask_shape=%s, meta_count=%s",
+            tuple(batch["input_ids"].shape) if "input_ids" in batch else None,
+            tuple(batch["attention_mask"].shape) if "attention_mask" in batch else None,
+            len(metas) if isinstance(metas, list) else None,
+        )
+
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
             if self.model_args.upcast_layernorm:
@@ -476,7 +484,9 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         else:
             meta_list = [None for _ in queries]
 
-        if logger.isEnabledFor(logging.INFO):
+        logger.debug("Decoded PPO responses: query_count=%d, response_count=%d", len(queries), len(responses))
+
+        if logger.isEnabledFor(py_logging.INFO):
             for idx, (query_ids, response_ids) in enumerate(zip(queries, responses)):
                 prompt_text = self.tokenizer.decode(query_ids, skip_special_tokens=True)
                 response_text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
