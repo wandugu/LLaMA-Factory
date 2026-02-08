@@ -109,7 +109,7 @@ stats:
   auto_sample: true
   max_examples: 2
   sample_dir: outputs/samples
-  emit_schemas: false
+  emit_schemas: true
   schema_output_dir: outputs/schemas
   schema_file_map:
     traj: traj.schema.json
