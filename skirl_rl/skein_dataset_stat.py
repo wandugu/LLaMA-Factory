@@ -334,6 +334,193 @@ def _build_sample_pair() -> Dict[str, Any]:
     }
 
 
+def _span_schema() -> Dict[str, Any]:
+    return {
+        "anyOf": [
+            {"type": "string", "pattern": "^\\d+-\\d+$"},
+            {
+                "type": "array",
+                "items": {"type": "integer"},
+                "minItems": 2,
+                "maxItems": 2,
+            },
+        ]
+    }
+
+
+def _strict_object(properties: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+    }
+
+
+def _build_json_schemas() -> Dict[str, Dict[str, Any]]:
+    span_schema = _span_schema()
+    text_ref_schema = _strict_object(
+        {
+            "doc_id": {"type": "string"},
+            "span": span_schema,
+        }
+    )
+    trajectory_step_schema = _strict_object(
+        {
+            "event_id": {"type": "string"},
+            "type": {"type": "string"},
+            "skeleton_hits": {"type": "array", "items": {"type": "string"}},
+            "delta_days_from_prev": {"type": "number"},
+            "roles": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+            },
+            "time": {"type": "string"},
+            "text_refs": {"type": "array", "items": text_ref_schema},
+        }
+    )
+    trajectory_schema = _strict_object(
+        {
+            "person_id": {"type": "string"},
+            "trajectory_id": {"type": "string"},
+            "label": {"type": "string"},
+            "steps": {"type": "array", "items": trajectory_step_schema},
+            "meta": _strict_object(
+                {
+                    "graph_nodes": {"type": "array", "items": {"type": "string"}},
+                    "graph_edges": {"type": "array", "items": {"type": "array"}},
+                }
+            ),
+        }
+    )
+
+    event_schema = _strict_object(
+        {
+            "doc_id": {"type": "string"},
+            "event_id": {"type": "string"},
+            "trigger": _strict_object(
+                {
+                    "text": {"type": "string"},
+                    "span": span_schema,
+                    "type": {"type": "string"},
+                }
+            ),
+            "arguments": {
+                "type": "array",
+                "items": _strict_object(
+                    {
+                        "role": {"type": "string"},
+                        "text": {"type": "string"},
+                        "span": span_schema,
+                        "entity_id": {"type": "string"},
+                    }
+                ),
+            },
+            "time": _strict_object(
+                {
+                    "text": {"type": "string"},
+                    "span": span_schema,
+                }
+            ),
+            "relations": _strict_object(
+                {
+                    "previous": {"type": "array"},
+                    "next": {"type": "array"},
+                }
+            ),
+            "confidence": _strict_object(
+                {
+                    "trigger_prob": {"type": "number"},
+                    "arg_role_avg": {"type": "number"},
+                }
+            ),
+            "source": {"type": "string"},
+            "mapping": _strict_object({"event": {"type": "string"}}),
+            "split": {"type": "string"},
+        }
+    )
+
+    pairs_schema = _strict_object(
+        {
+            "better": {"type": "string"},
+            "worse": {"type": "string"},
+            "reason": {"type": "string"},
+        }
+    )
+
+    sft_schema = _strict_object(
+        {
+            "instruction": {"type": "string"},
+            "input": {"type": "string"},
+            "output": {"type": "string"},
+            "system": {"type": "string"},
+            "history": {"type": "array"},
+        }
+    )
+
+    rl_prompt_schema = _strict_object(
+        {
+            "prompt": {"type": "string"},
+            "response": {"type": "string"},
+            "trajectory_id": {"type": "string"},
+            "person_id": {"type": "string"},
+            "_meta": _strict_object(
+                {
+                    "trajectory_id": {"type": "string"},
+                    "person_id": {"type": "string"},
+                }
+            ),
+        }
+    )
+
+    def _wrap(schema: Dict[str, Any], title: str) -> Dict[str, Any]:
+        payload = dict(schema)
+        payload["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+        payload["title"] = title
+        payload["$defs"] = {"span": span_schema}
+        return payload
+
+    return {
+        "traj": _wrap(trajectory_schema, "SKEIN Trajectory Record"),
+        "event": _wrap(event_schema, "SKEIN Event Record"),
+        "pairs": _wrap(pairs_schema, "SKEIN Preference Pair Record"),
+        "sft": _wrap(sft_schema, "SKEIN SFT Record"),
+        "rl_prompts": _wrap(rl_prompt_schema, "SKEIN RL Prompt Record"),
+    }
+
+
+def _emit_json_schemas(
+    root: Path,
+    stats_cfg: Dict[str, Any],
+    processed_files: Dict[str, str],
+    output_override: Path | None = None,
+) -> Dict[str, str]:
+    schema_dir = _resolve_path(root, stats_cfg["schema_output_dir"])
+    if output_override is not None:
+        schema_dir = _resolve_path(root, output_override)
+    schema_dir.mkdir(parents=True, exist_ok=True)
+    LOGGER.debug("Schema output dir: %s", schema_dir)
+
+    schema_file_map = stats_cfg.get("schema_file_map", {})
+    if not isinstance(schema_file_map, dict):
+        raise ValueError("stats.schema_file_map must be a mapping")
+
+    schemas = _build_json_schemas()
+    output_paths: Dict[str, str] = {}
+    for key, schema in schemas.items():
+        filename = schema_file_map.get(key, f"{key}.schema.json")
+        output_path = schema_dir / filename
+        output_path.write_text(json.dumps(schema, ensure_ascii=False, indent=2), encoding="utf-8")
+        output_paths[key] = str(output_path)
+        LOGGER.debug("Schema emitted for %s -> %s", key, output_path)
+
+    for key, filename in processed_files.items():
+        if key not in schemas:
+            continue
+        LOGGER.debug("Schema ready for dataset file %s (%s)", filename, key)
+
+    return output_paths
+
+
 def _ensure_sample_dataset(root: Path, cfg: Dict[str, Any], processed_files: Dict[str, str]) -> Dict[str, Path]:
     sample_dir = _resolve_path(root, cfg["sample_dir"])
     sample_dir.mkdir(parents=True, exist_ok=True)
@@ -401,6 +588,8 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--mode", type=str, default=None)
     parser.add_argument("--auto-sample", action="store_true")
+    parser.add_argument("--emit-schemas", action="store_true")
+    parser.add_argument("--schema-dir", type=Path, default=None)
     return parser
 
 
@@ -437,6 +626,15 @@ def main() -> None:
         raise ValueError("stats.dataset_file_keys is empty or invalid")
 
     auto_sample = bool(stats_cfg.get("auto_sample", False)) or args.auto_sample
+    emit_schemas = bool(stats_cfg.get("emit_schemas", False)) or args.emit_schemas
+    schema_paths: Dict[str, str] = {}
+    if emit_schemas:
+        schema_paths = _emit_json_schemas(
+            root,
+            stats_cfg,
+            processed_files,
+            output_override=args.schema_dir,
+        )
 
     available_records: Dict[str, List[Dict[str, Any]]] = {}
     missing_files: List[str] = []
@@ -464,6 +662,8 @@ def main() -> None:
         "used_sample": bool(sample_paths),
         "files": {},
     }
+    if schema_paths:
+        summary["schemas"] = schema_paths
 
     for name, handler in (
         (processed_files.get("traj"), _trajectory_stats),
