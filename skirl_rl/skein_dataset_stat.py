@@ -14,6 +14,8 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 import yaml
 
+from skirl_rl.config_utils import resolve_processed_files
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -323,54 +325,54 @@ def _build_sample_pair() -> Dict[str, Any]:
     }
 
 
-def _ensure_sample_dataset(root: Path, cfg: Dict[str, Any]) -> Dict[str, Path]:
+def _ensure_sample_dataset(root: Path, cfg: Dict[str, Any], processed_files: Dict[str, str]) -> Dict[str, Path]:
     sample_dir = _resolve_path(root, cfg["sample_dir"])
     sample_dir.mkdir(parents=True, exist_ok=True)
 
     sample_paths = {
-        "traj.jsonl": _resolve_path(root, cfg["sample_traj_path"]),
-        "event.jsonl": _resolve_path(root, cfg["sample_event_path"]),
-        "pairs.jsonl": _resolve_path(root, cfg["sample_pairs_path"]),
-        "maven_sft.jsonl": _resolve_path(root, cfg["sample_sft_path"]),
-        "rl_prompts.jsonl": _resolve_path(root, cfg["sample_rl_prompts_path"]),
+        key: sample_dir / filename for key, filename in processed_files.items()
     }
 
-    if not sample_paths["traj.jsonl"].exists():
-        sample_paths["traj.jsonl"].write_text(
+    if sample_paths.get("traj") and not sample_paths["traj"].exists():
+        sample_paths["traj"].write_text(
             json.dumps(_build_sample_trajectory(), ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        LOGGER.debug("Sample trajectory written: %s", sample_paths["traj.jsonl"])
+        LOGGER.debug("Sample trajectory written: %s", sample_paths["traj"])
 
-    if not sample_paths["event.jsonl"].exists():
-        sample_paths["event.jsonl"].write_text(
+    if sample_paths.get("event") and not sample_paths["event"].exists():
+        sample_paths["event"].write_text(
             json.dumps(_build_sample_event(), ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        LOGGER.debug("Sample event written: %s", sample_paths["event.jsonl"])
+        LOGGER.debug("Sample event written: %s", sample_paths["event"])
 
-    if not sample_paths["pairs.jsonl"].exists():
-        sample_paths["pairs.jsonl"].write_text(
+    if sample_paths.get("pairs") and not sample_paths["pairs"].exists():
+        sample_paths["pairs"].write_text(
             json.dumps(_build_sample_pair(), ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        LOGGER.debug("Sample pairs written: %s", sample_paths["pairs.jsonl"])
+        LOGGER.debug("Sample pairs written: %s", sample_paths["pairs"])
 
-    if not sample_paths["maven_sft.jsonl"].exists():
-        sample_paths["maven_sft.jsonl"].write_text(
+    if sample_paths.get("sft") and not sample_paths["sft"].exists():
+        sample_paths["sft"].write_text(
             json.dumps(_build_sample_sft(), ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        LOGGER.debug("Sample sft written: %s", sample_paths["maven_sft.jsonl"])
+        LOGGER.debug("Sample sft written: %s", sample_paths["sft"])
 
-    if not sample_paths["rl_prompts.jsonl"].exists():
-        sample_paths["rl_prompts.jsonl"].write_text(
+    if sample_paths.get("rl_prompts") and not sample_paths["rl_prompts"].exists():
+        sample_paths["rl_prompts"].write_text(
             json.dumps(_build_sample_rl_prompt(), ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        LOGGER.debug("Sample rl prompts written: %s", sample_paths["rl_prompts.jsonl"])
+        LOGGER.debug("Sample rl prompts written: %s", sample_paths["rl_prompts"])
 
     return sample_paths
 
 
-def _collect_examples(available: Dict[str, List[Dict[str, Any]]], max_examples: int) -> List[Dict[str, Any]]:
+def _collect_examples(
+    available: Dict[str, List[Dict[str, Any]]],
+    ordered_files: List[str],
+    max_examples: int,
+) -> List[Dict[str, Any]]:
     examples: List[Dict[str, Any]] = []
-    for name in ("traj.jsonl", "rl_prompts.jsonl", "maven_sft.jsonl", "event.jsonl", "pairs.jsonl"):
+    for name in ordered_files:
         items = available.get(name) or []
         if not items:
             continue
@@ -410,9 +412,11 @@ def main() -> None:
     if args.output is not None:
         output_path = _resolve_path(root, args.output)
 
-    dataset_files = stats_cfg.get("dataset_files", [])
+    processed_files = resolve_processed_files(config)
+    file_keys = stats_cfg.get("dataset_file_keys", ["traj", "rl_prompts", "sft", "event", "pairs"])
+    dataset_files = [processed_files[key] for key in file_keys if key in processed_files]
     if not dataset_files:
-        raise ValueError("stats.dataset_files is empty")
+        raise ValueError("stats.dataset_file_keys is empty or invalid")
 
     auto_sample = bool(stats_cfg.get("auto_sample", False)) or args.auto_sample
 
@@ -428,11 +432,13 @@ def main() -> None:
     sample_paths: Dict[str, Path] | None = None
     if missing_files and auto_sample:
         LOGGER.debug("Missing files %s, generating sample dataset.", missing_files)
-        sample_paths = _ensure_sample_dataset(root, stats_cfg)
+        sample_paths = _ensure_sample_dataset(root, stats_cfg, processed_files)
         for name in missing_files:
-            sample_path = sample_paths.get(name)
-            if sample_path and sample_path.exists():
-                available_records[name] = _read_jsonl(sample_path)
+            sample_key = next((key for key, filename in processed_files.items() if filename == name), None)
+            if sample_key:
+                sample_path = sample_paths.get(sample_key)
+                if sample_path and sample_path.exists():
+                    available_records[name] = _read_jsonl(sample_path)
 
     summary: Dict[str, Any] = {
         "dataset_dir": str(dataset_dir),
@@ -440,19 +446,18 @@ def main() -> None:
         "files": {},
     }
 
-    if "traj.jsonl" in available_records:
-        summary["files"]["traj.jsonl"] = _trajectory_stats(available_records["traj.jsonl"])
-    if "pairs.jsonl" in available_records:
-        summary["files"]["pairs.jsonl"] = _pairs_stats(available_records["pairs.jsonl"])
-    if "event.jsonl" in available_records:
-        summary["files"]["event.jsonl"] = _event_stats(available_records["event.jsonl"])
-    if "maven_sft.jsonl" in available_records:
-        summary["files"]["maven_sft.jsonl"] = _sft_stats(available_records["maven_sft.jsonl"])
-    if "rl_prompts.jsonl" in available_records:
-        summary["files"]["rl_prompts.jsonl"] = _rl_prompt_stats(available_records["rl_prompts.jsonl"])
+    for name, handler in (
+        (processed_files.get("traj"), _trajectory_stats),
+        (processed_files.get("pairs"), _pairs_stats),
+        (processed_files.get("event"), _event_stats),
+        (processed_files.get("sft"), _sft_stats),
+        (processed_files.get("rl_prompts"), _rl_prompt_stats),
+    ):
+        if name and name in available_records:
+            summary["files"][name] = handler(available_records[name])
 
     max_examples = int(stats_cfg.get("max_examples", 2))
-    summary["examples"] = _collect_examples(available_records, max_examples=max_examples)
+    summary["examples"] = _collect_examples(available_records, dataset_files, max_examples=max_examples)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

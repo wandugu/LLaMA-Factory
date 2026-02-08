@@ -2,16 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-TRAJ_PATH="${ROOT_DIR}/data/processed/traj.jsonl"
-PAIR_PATH="${ROOT_DIR}/data/processed/pairs.jsonl"
-OUTPUT_DIR="/root/autodl-tmp/qwen-4b-maven-rm"
-OUTPUT_PATH="${OUTPUT_DIR}/reward.ckpt"
+MODE_CONFIG="${ROOT_DIR}/skirl_rl/config.yaml"
+eval "$(python "${ROOT_DIR}/skirl_rl/scripts/resolve_mode_env.py" --config "${MODE_CONFIG}")"
+
+TRAJ_PATH="${ROOT_DIR}/${SKIRL_PROCESSED_DIR}/${SKIRL_TRAJ_FILE}"
+PAIR_PATH="${ROOT_DIR}/${SKIRL_PROCESSED_DIR}/${SKIRL_PAIRS_FILE}"
+OUTPUT_DIR="${SKIRL_REWARD_OUTPUT_DIR}"
+OUTPUT_PATH="${SKIRL_REWARD_CKPT}"
 
 cd "${ROOT_DIR}"
 
 if [ ! -f "${TRAJ_PATH}" ]; then
   echo "[INFO] 轨迹文件缺失，先生成演示数据"
 fi
+
+echo "[INFO] 当前模式：${SKIRL_MODE}"
 
 mkdir -p "${OUTPUT_DIR}"
 

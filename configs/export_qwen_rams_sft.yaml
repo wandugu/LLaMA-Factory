@@ -1,0 +1,11 @@
+### Merge LoRA adapter trained on RAMS into the base Qwen model
+
+model_name_or_path: /root/autodl-tmp/Qwen3-4B-Base/
+adapter_name_or_path:
+  - /root/autodl-tmp/qwen-4b-rams-pretrain
+trust_remote_code: true
+
+export_dir: /root/autodl-tmp/qwen-4b-rams-sft-merged
+export_size: 5
+export_device: cpu
+export_legacy_format: false

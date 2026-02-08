@@ -1,0 +1,47 @@
+model_name_or_path: /root/autodl-tmp/qwen-4b-rams-sft-merged
+stage: ppo
+
+# 数据集设置
+finetuning_type: lora
+dataset: rams_rl
+dataset_dir: data/processed
+template: qwen
+
+# 生成参数（PPO rollout）
+do_sample: false
+temperature: 0.2
+top_p: 0.9
+top_k: 20
+repetition_penalty: 1.05
+max_new_tokens: 256
+
+do_train: true
+output_dir: /root/autodl-tmp/qwen-4b-rams-sft-merged/qwen-4b-rams-rl
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4
+num_train_epochs: 1
+learning_rate: 1.0e-6
+ppo_epochs: 4
+ppo_target: 0.1
+ppo_whiten_rewards: false
+bf16: false
+logging_steps: 10
+save_steps: 200
+overwrite_output_dir: true
+
+# 奖励回调
+reward_model_type: callback
+reward_callback: skirl_maxent
+reward_callback_args:
+  reward_ckpt: /root/autodl-tmp/qwen-4b-rams-rm/reward.ckpt
+  trajectory_path: data/processed/rams_traj.jsonl
+  alpha: 0.6
+  reward_clip:
+    - -5.0
+    - 5.0
+
+# wandb 设置（可改为 none 禁用）
+report_to: wandb
+run_name: rams_rl
+wandb_project: rams-irl
+wandb_tags: ppo,qwen3-4b,rams
