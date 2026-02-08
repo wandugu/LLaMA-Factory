@@ -2,9 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-OUTPUT_DIR="${ROOT_DIR}/outputs/qwen-4b-rl"
-REWARD_CKPT="${ROOT_DIR}/outputs/qwen-4b-rm/reward.ckpt"
-TRAJ_PATH="${ROOT_DIR}/data/processed/traj.jsonl"
+MODE_CONFIG="${ROOT_DIR}/skirl_rl/config.yaml"
+eval "$(python "${ROOT_DIR}/skirl_rl/scripts/resolve_mode_env.py" --config "${MODE_CONFIG}")"
+
+OUTPUT_DIR="${SKIRL_POLICY_OUTPUT_DIR}"
+REWARD_CKPT="${SKIRL_REWARD_CKPT}"
+TRAJ_PATH="${ROOT_DIR}/${SKIRL_PROCESSED_DIR}/${SKIRL_TRAJ_FILE}"
 POLICY_LOGPROB="${OUTPUT_DIR}/policy_logprobs.json"
 
 cd "${ROOT_DIR}"

@@ -17,5 +17,24 @@
       "prompt": "prompt",
       "response": "response"
     }
+  },
+  "rams_sft": {
+    "file_name": "rams_sft.jsonl",
+    "formatting": "alpaca",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output",
+      "system": "system",
+      "history": "history"
+    }
+  },
+  "rams_rl": {
+    "file_name": "rams_rl_prompts.jsonl",
+    "formatting": "skirl_rl",
+    "columns": {
+      "prompt": "prompt",
+      "response": "response"
+    }
   }
 }

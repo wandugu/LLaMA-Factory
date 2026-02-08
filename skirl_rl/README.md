@@ -1,6 +1,6 @@
 # SKIRL-RL 最小演示
 
-本目录提供一个基于 LlamaFactory 的 **SKIRL-RL**（监督预训练 → 最大熵 IRL 奖励 → PPO/GRPO 策略微调 → 轨迹打分与 Top-K 排序）最小可运行流程。所有步骤均可在无网络环境下运行，使用 `skirl_rl/scripts/0_convert_maven_to_event_traj.py` 生成的合成数据贯通整个链路。
+本目录提供一个基于 LlamaFactory 的 **SKIRL-RL**（监督预训练 → 最大熵 IRL 奖励 → PPO/GRPO 策略微调 → 轨迹打分与 Top-K 排序）最小可运行流程。所有步骤均可在无网络环境下运行，支持 MAVEN-ERE 与 RAMS 数据集，数据转换脚本分别为 `skirl_rl/scripts/0_convert_maven_to_event_traj.py` 与 `skirl_rl/scripts/0_convert_rams_to_event_traj.py`。
 
 ## 目录结构
 
@@ -16,6 +16,7 @@ skirl_rl/
 │   └── score_policy.py        # 轨迹打分、排序与评估
 ├── scripts/
 │   ├── 0_convert_maven_to_event_traj.py
+│   ├── 0_convert_rams_to_event_traj.py
 │   ├── 1_pretrain_qwen_maven.sh
 │   ├── 2_train_reward_maxent.sh
 │   ├── 3_train_policy_rl.sh
@@ -31,7 +32,13 @@ skirl_rl/
    python skirl_rl/scripts/0_convert_maven_to_event_traj.py
    ```
 
-   生成的文件位于 `data/processed/`，包含 `event.jsonl`、`traj.jsonl`、`pairs.jsonl`、`maven_sft.jsonl`、`rl_prompts.jsonl` 及对应统计信息。
+   RAMS 数据集则运行：
+
+   ```bash
+   python skirl_rl/scripts/0_convert_rams_to_event_traj.py
+   ```
+
+   生成的文件位于 `data/processed/`，MAVEN 对应 `event.jsonl`、`traj.jsonl`、`pairs.jsonl`、`maven_sft.jsonl`、`rl_prompts.jsonl`；RAMS 对应 `rams_event.jsonl`、`rams_traj.jsonl`、`rams_pairs.jsonl`、`rams_sft.jsonl`、`rams_rl_prompts.jsonl`。
 
 2. **监督预训练（SFT）**
 
@@ -39,7 +46,7 @@ skirl_rl/
    bash skirl_rl/scripts/1_pretrain_qwen_maven.sh
    ```
 
-   默认读取 `configs/pretrain_maven.yaml`，产出 `outputs/qwen-4b-mypretrain`。
+   训练脚本会读取 `skirl_rl/config.yaml` 的 `data.mode` 来自动选择 `configs/pretrain_*.yaml` 与输出目录。
 
 3. **最大熵 IRL 奖励模型**
 
@@ -47,7 +54,7 @@ skirl_rl/
    bash skirl_rl/scripts/2_train_reward_maxent.sh
    ```
 
-   基于 `traj.jsonl` 与 `pairs.jsonl` 学习奖励，保存至 `outputs/qwen-4b-rm/reward.ckpt`。
+   基于 `traj.jsonl`/`pairs.jsonl`（或 RAMS 对应文件）学习奖励，保存至 `data.mode` 对应的奖励目录。
 
 4. **策略 RL（PPO/GRPO 或离线启发式）**
 
@@ -63,7 +70,7 @@ skirl_rl/
    bash skirl_rl/scripts/4_score_and_rank.sh --k 20
    ```
 
-   输出 `outputs/qwen-4b-rl/topk.json` 与 `reasons.jsonl`，可选 `--eval` 计算 `NDCG@K/MAP@K/Hit@K`。
+   输出 `data.mode` 对应的 Top-K 结果与 `reasons.jsonl`，可选 `--eval` 计算 `NDCG@K/MAP@K/Hit@K`。
 
 6. **SKEIN 表格评估（Top-10 指标）**
 

@@ -19,221 +19,46 @@ import json
 import logging
 import random
 from collections import defaultdict
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import ValidationError
 from tqdm import tqdm
+
+if __package__ is None or __package__ == "":
+    import sys
+
+    sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+from skirl_rl.convert.common import (
+    DatasetStats,
+    EventArgument,
+    EventConfidence,
+    EventEntry,
+    EventRelation,
+    EventRelations,
+    EventTime,
+    EventTrigger,
+    PreferencePair,
+    RLPrompt,
+    SFTSample,
+    TrajectoryEntry,
+    TrajectoryMeta,
+    TrajectoryStep,
+    build_summary,
+    ensure_dir,
+    write_dataset_info,
+    write_jsonl,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SRC = ROOT / "data" / "maven_raw"
 DEFAULT_DST = ROOT / "data" / "processed"
 MAPPING_DIR = ROOT / "mapping"
 
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="[%(levelname)s] %(message)s")
 LOGGER = logging.getLogger("convert_maven")
-
-
-# =============================
-# Pydantic Schema Definitions
-# =============================
-
-
-class EventArgument(BaseModel):
-    role: str
-    entity_id: str
-    span: List[int]
-
-    @field_validator("span")
-    @classmethod
-    def _validate_span(cls, value: List[int]) -> List[int]:
-        assert len(value) == 2 and value[0] <= value[1], "span must be [start, end]"
-        return value
-
-
-class EventTrigger(BaseModel):
-    span: List[int]
-    text: str
-    type: str
-
-    @field_validator("span")
-    @classmethod
-    def _validate_trigger_span(cls, value: List[int]) -> List[int]:
-        assert len(value) == 2 and value[0] <= value[1], "trigger span must be [start, end]"
-        return value
-
-
-class EventRelation(BaseModel):
-    type: str
-    head: str
-    tail: str
-
-
-class EventRelations(BaseModel):
-    temporal: List[EventRelation]
-    causal: List[EventRelation]
-    subevent: List[EventRelation]
-
-
-class EventTime(BaseModel):
-    value: str
-    span: List[int]
-
-    @field_validator("value")
-    @classmethod
-    def _validate_value(cls, value: str) -> str:
-        datetime.strptime(value, "%Y-%m-%d")
-        return value
-
-    @field_validator("span")
-    @classmethod
-    def _validate_span(cls, value: List[int]) -> List[int]:
-        assert len(value) == 2 and value[0] <= value[1], "time span must be [start, end]"
-        return value
-
-
-class EventConfidence(BaseModel):
-    trigger_prob: float = Field(..., ge=0.0, le=1.0)
-    arg_role_avg: float = Field(..., ge=0.0, le=1.0)
-
-
-class EventEntry(BaseModel):
-    doc_id: str
-    event_id: str
-    trigger: EventTrigger
-    arguments: List[EventArgument]
-    time: EventTime
-    relations: EventRelations
-    confidence: EventConfidence
-    source: str
-    mapping: Dict[str, str]
-    split: Optional[str] = None
-
-
-class TrajectoryStep(BaseModel):
-    event_id: str
-    time: str
-    type: str
-    roles: Dict[str, str]
-    delta_days_from_prev: int
-    text_refs: List[Dict[str, object]]
-    skeleton_hits: List[str]
-
-    @field_validator("time")
-    @classmethod
-    def _validate_time(cls, value: str) -> str:
-        datetime.strptime(value, "%Y-%m-%d")
-        return value
-
-
-class TrajectoryMeta(BaseModel):
-    graph_nodes: List[str]
-    graph_edges: List[List[str]]
-
-
-class TrajectoryEntry(BaseModel):
-    person_id: str
-    trajectory_id: str
-    label: str
-    steps: List[TrajectoryStep]
-    meta: TrajectoryMeta
-
-    @field_validator("label")
-    @classmethod
-    def _validate_label(cls, value: str) -> str:
-        assert value in {"expert", "candidate", "negative"}
-        return value
-
-    @field_validator("steps")
-    @classmethod
-    def _validate_steps(cls, value: List[TrajectoryStep]) -> List[TrajectoryStep]:
-        assert value, "trajectory must have at least one step"
-        return value
-
-
-class PreferencePair(BaseModel):
-    better: str
-    worse: str
-    reason: str
-
-
-class SFTSample(BaseModel):
-    instruction: str
-    input: str
-    output: str
-    system: str
-    history: List[List[str]] = Field(default_factory=list)
-
-
-class RLPrompt(BaseModel):
-    prompt: str
-    response: str
-    trajectory_id: str
-    person_id: str
-
-
-# =============================
-# 工具函数与统计
-# =============================
-
-
-@dataclass
-class DatasetStats:
-    name: str
-    num_records: int
-    extra: Dict[str, object] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, object]:
-        return {"name": self.name, "num_records": self.num_records, **self.extra}
-
-
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-
-
-def write_jsonl(path: Path, records: Iterable[BaseModel]) -> DatasetStats:
-    records = list(records)
-    ensure_dir(path.parent)
-    with path.open("w", encoding="utf-8") as f:
-        for item in records:
-            if isinstance(item, BaseModel):
-                payload = item.model_dump(exclude_none=True)
-            else:
-                payload = item
-            if path.name == "rl_prompts.jsonl":
-                meta = {
-                    "trajectory_id": payload.get("trajectory_id"),
-                    "person_id": payload.get("person_id"),
-                }
-                payload["_meta"] = {k: v for k, v in meta.items() if v is not None}
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    extra: Dict[str, object] = {}
-    if path.name == "event.jsonl":
-        doc_ids = {r.doc_id for r in records if isinstance(r, EventEntry)}
-        extra["num_docs"] = len(doc_ids)
-    if path.name == "traj.jsonl":
-        labels = defaultdict(int)
-        lengths: List[int] = []
-        for r in records:
-            if isinstance(r, TrajectoryEntry):
-                labels[r.label] += 1
-                lengths.append(len(r.steps))
-        if lengths:
-            extra["avg_traj_len"] = sum(lengths) / len(lengths)
-        extra["label_distribution"] = dict(labels)
-    if path.name == "pairs.jsonl":
-        unique_ids = set()
-        for r in records:
-            if isinstance(r, PreferencePair):
-                unique_ids.add(r.better)
-                unique_ids.add(r.worse)
-        extra["num_unique_ids"] = len(unique_ids)
-    stats = DatasetStats(name=path.name, num_records=len(records), extra=extra)
-    stats_path = path.with_suffix(path.suffix + ".stats.json")
-    stats_path.write_text(json.dumps(stats.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    return stats
 
 
 # =============================
@@ -1195,39 +1020,6 @@ def build_rl_prompts(trajectories: List[TrajectoryEntry]) -> List[RLPrompt]:
 # =============================
 
 
-def build_summary(stats: List[DatasetStats], output_path: Path) -> None:
-    summary = {item.name: item.to_dict() for item in stats}
-    output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def write_dataset_info(dst: Path) -> None:
-    dataset_info_path = dst / "dataset_info.json"
-    dataset_info = {
-        "maven_sft": {
-            "file_name": "maven_sft.jsonl",
-            "formatting": "alpaca",
-            "columns": {
-                "prompt": "instruction",
-                "query": "input",
-                "response": "output",
-                "system": "system",
-                "history": "history",
-            },
-        },
-        "maven_rl": {
-            "file_name": "rl_prompts.jsonl",
-            "formatting": "skirl_rl",
-            "columns": {
-                "prompt": "prompt",
-                "response": "response",
-            },
-        },
-    }
-    dataset_info_path.write_text(
-        json.dumps(dataset_info, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert MAVEN raw JSON to processed SKIRL datasets")
     parser.add_argument("--src", type=Path, default=DEFAULT_SRC, help="原始 JSON 目录")
@@ -1271,7 +1063,27 @@ def main() -> None:
     rl_prompts = build_rl_prompts(all_trajs)
     rl_stats = write_jsonl(args.dst / "rl_prompts.jsonl", rl_prompts)
 
-    write_dataset_info(args.dst)
+    write_dataset_info(
+        args.dst,
+        {
+            "maven_sft": {
+                "file_name": "maven_sft.jsonl",
+                "formatting": "alpaca",
+                "columns": {
+                    "prompt": "instruction",
+                    "query": "input",
+                    "response": "output",
+                    "system": "system",
+                    "history": "history",
+                },
+            },
+            "maven_rl": {
+                "file_name": "rl_prompts.jsonl",
+                "formatting": "skirl_rl",
+                "columns": {"prompt": "prompt", "response": "response"},
+            },
+        },
+    )
 
     summary_path = args.dst / "summary.stats.json"
     summary_items = [event_stats, traj_stats, pair_stats, sft_stats]

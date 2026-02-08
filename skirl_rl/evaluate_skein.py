@@ -15,6 +15,7 @@ if __package__ is None or __package__ == "":
     import sys
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
+    from skirl_rl.config_utils import resolve_mode  # type: ignore
     from skirl_rl.irl.features import build_feature_vector  # type: ignore
     from skirl_rl.irl.maxent_irl import MaxEntIRL  # type: ignore
     from skirl_rl.policy.score_policy import (  # type: ignore
@@ -26,6 +27,7 @@ if __package__ is None or __package__ == "":
         summarise_reason,
     )
 else:
+    from .config_utils import resolve_mode
     from .irl.features import build_feature_vector
     from .irl.maxent_irl import MaxEntIRL
     from .policy.score_policy import (
@@ -241,6 +243,16 @@ def main() -> None:
     base_cfg = config.get("defaults", {})
     if not isinstance(base_cfg, dict):
         raise ValueError("defaults must be a mapping")
+
+    defaults_by_mode = config.get("defaults_by_mode", {}) if isinstance(config.get("defaults_by_mode", {}), dict) else {}
+    if defaults_by_mode:
+        try:
+            mode, _ = resolve_mode(config)
+            mode_defaults = defaults_by_mode.get(mode, {})
+            if isinstance(mode_defaults, dict):
+                base_cfg = _deep_merge(base_cfg, mode_defaults)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.debug("Failed to resolve defaults_by_mode: %s", exc)
 
     run_cfg = config.get("run", {}) if isinstance(config.get("run", {}), dict) else {}
     dataset_spec = args.datasets or str(run_cfg.get("datasets", "MAVEN-ERE"))

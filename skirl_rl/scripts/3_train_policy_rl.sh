@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export WANDB_PROJECT="${WANDB_PROJECT:-maven-irl}"
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+MODE_CONFIG="${ROOT_DIR}/skirl_rl/config.yaml"
+eval "$(python "${ROOT_DIR}/skirl_rl/scripts/resolve_mode_env.py" --config "${MODE_CONFIG}")"
+
+export WANDB_PROJECT="${WANDB_PROJECT:-${SKIRL_WANDB_PROJECT}}"
 export WANDB_MODE="${WANDB_MODE:-online}"              # offline/online
 # 可选：团队与标签
 # export WANDB_ENTITY="your_team"
-export WANDB_TAGS="${WANDB_TAGS:-sft,qwen3-4b,maven}"
+export WANDB_TAGS="${WANDB_TAGS:-${SKIRL_WANDB_PPO_TAGS}}"
 
 # 默认开启 LlamaFactory DEBUG 日志，便于定位 PPO 生成异常（可通过外部环境变量覆盖）
 export LLAMAFACTORY_VERBOSITY="${LLAMAFACTORY_VERBOSITY:-DEBUG}"
@@ -14,11 +18,15 @@ export LLAMAFACTORY_VERBOSITY="${LLAMAFACTORY_VERBOSITY:-DEBUG}"
 export TRANSFORMERS_VERBOSITY="error"
 export TRANSFORMERS_NO_ADVISORY_WARNINGS="1"
 
-ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-CONFIG_PATH="${ROOT_DIR}/configs/ppo_rl.yaml"
-PROMPTS_PATH="${ROOT_DIR}/data/processed/rl_prompts.jsonl"
-REWARD_CKPT="/root/autodl-tmp/qwen-4b-maven-rm/reward.ckpt"
-OUTPUT_DIR="/root/autodl-tmp/qwen-4b-rl"
+if [[ "${SKIRL_PPO_CONFIG}" = /* ]]; then
+  CONFIG_PATH="${SKIRL_PPO_CONFIG}"
+else
+  CONFIG_PATH="${ROOT_DIR}/${SKIRL_PPO_CONFIG}"
+fi
+
+PROMPTS_PATH="${ROOT_DIR}/${SKIRL_PROCESSED_DIR}/${SKIRL_RL_PROMPTS_FILE}"
+REWARD_CKPT="${SKIRL_REWARD_CKPT}"
+OUTPUT_DIR="${SKIRL_POLICY_OUTPUT_DIR}"
 
 export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH:-}"
 readarray -t __SKIRL_CONFIG_INFO < <(python - <<'PY' "${CONFIG_PATH}" "${ROOT_DIR}"
@@ -112,9 +120,9 @@ if [ "${SHOULD_USE_OFFICIAL}" -eq 1 ]; then
   fi
 
   if [ ! -d "${MODEL_PATH}" ] && [ ! -f "${MODEL_PATH}/config.json" ]; then
-    echo "[ERROR] 未找到模型目录 ${MODEL_PATH}，请先完成 1_pretrain_qwen_maven.sh 或更新配置路径"
-    exit 1
-  fi
+  echo "[ERROR] 未找到模型目录 ${MODEL_PATH}，请先完成 1_pretrain_qwen_maven.sh 或更新配置路径（mode=${SKIRL_MODE}）"
+  exit 1
+fi
 
   if command -v llamafactory-cli >/dev/null 2>&1; then
     llamafactory-cli train "${CONFIG_PATH}"
