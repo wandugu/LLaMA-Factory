@@ -6,15 +6,18 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from statistics import mean, median
 from typing import Any, Dict, Iterable, List, Tuple
 
-import yaml
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
-from skirl_rl.config_utils import resolve_processed_files
+from skirl_rl.config_utils import load_config, resolve_mode, resolve_processed_files
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,13 +39,19 @@ def _resolve_path(root: Path, value: str | Path) -> Path:
     return root / path
 
 
-def _load_config(path: Path) -> Dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(f"config not found: {path}")
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, dict):
-        raise ValueError("config yaml must be a mapping")
-    return payload
+def _override_mode(config: Dict[str, Any], mode: str | None) -> Dict[str, Any]:
+    if not mode:
+        return config
+    data_cfg = config.get("data", {})
+    if not isinstance(data_cfg, dict):
+        data_cfg = {}
+    modes_cfg = data_cfg.get("modes", {})
+    if not isinstance(modes_cfg, dict) or mode not in modes_cfg:
+        raise ValueError(f"mode '{mode}' is not configured in data.modes")
+    updated = dict(config)
+    updated["data"] = dict(data_cfg)
+    updated["data"]["mode"] = mode
+    return updated
 
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -390,6 +399,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("skirl_rl/config.yaml"))
     parser.add_argument("--dataset-dir", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--mode", type=str, default=None)
     parser.add_argument("--auto-sample", action="store_true")
     return parser
 
@@ -397,8 +407,13 @@ def build_argparser() -> argparse.ArgumentParser:
 def main() -> None:
     logging.basicConfig(level=logging.DEBUG, format="[%(levelname)s] %(message)s")
     args = build_argparser().parse_args()
-    root = Path(__file__).resolve().parents[1]
-    config = _load_config(_resolve_path(root, args.config))
+    root = ROOT_DIR
+    config_path = _resolve_path(root, args.config)
+    LOGGER.debug("Load config from %s", config_path)
+    config = load_config(config_path)
+    config = _override_mode(config, args.mode)
+    mode_name, _ = resolve_mode(config)
+    LOGGER.debug("Using mode: %s", mode_name)
 
     stats_cfg = config.get("stats", {}) if isinstance(config.get("stats", {}), dict) else {}
     if not stats_cfg:
@@ -407,12 +422,15 @@ def main() -> None:
     dataset_dir = _resolve_path(root, stats_cfg["dataset_dir"])
     if args.dataset_dir is not None:
         dataset_dir = _resolve_path(root, args.dataset_dir)
+    LOGGER.debug("Dataset dir: %s", dataset_dir)
 
     output_path = _resolve_path(root, stats_cfg["output_path"])
     if args.output is not None:
         output_path = _resolve_path(root, args.output)
+    LOGGER.debug("Output path: %s", output_path)
 
     processed_files = resolve_processed_files(config)
+    LOGGER.debug("Processed files mapping: %s", processed_files)
     file_keys = stats_cfg.get("dataset_file_keys", ["traj", "rl_prompts", "sft", "event", "pairs"])
     dataset_files = [processed_files[key] for key in file_keys if key in processed_files]
     if not dataset_files:
@@ -428,6 +446,7 @@ def main() -> None:
             available_records[name] = _read_jsonl(path)
         else:
             missing_files.append(name)
+            LOGGER.debug("Missing dataset file: %s", path)
 
     sample_paths: Dict[str, Path] | None = None
     if missing_files and auto_sample:
