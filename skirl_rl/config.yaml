@@ -109,3 +109,11 @@ stats:
   auto_sample: true
   max_examples: 2
   sample_dir: outputs/samples
+  emit_schemas: false
+  schema_output_dir: outputs/schemas
+  schema_file_map:
+    traj: traj.schema.json
+    rl_prompts: rl_prompts.schema.json
+    sft: sft.schema.json
+    event: event.schema.json
+    pairs: pairs.schema.json
