@@ -117,3 +117,108 @@ stats:
     sft: sft.schema.json
     event: event.schema.json
     pairs: pairs.schema.json
+  stage_mapping:
+    enabled: true
+    mapping_file: mapping/event2skeleton.json
+    stage_order:
+      - PREP
+      - PROBE
+      - EXECUTE
+      - CASHOUT
+    datasets:
+      - mode: maven
+        label: MAVEN-ERE
+      - mode: rams
+        label: RAMS
+    fallback:
+      default_stage: PREP
+      keywords:
+        prep:
+          - plan
+          - prepare
+          - gather
+          - meet
+          - statement
+          - warn
+          - warning
+          - know
+          - intel
+          - intelligence
+          - discuss
+          - train
+          - process_start
+          - mobilize
+          - mobilise
+        probe:
+          - probe
+          - observe
+          - monitor
+          - investigate
+          - analyse
+          - analyze
+          - assess
+          - inspect
+          - review
+          - survey
+          - recon
+          - scout
+          - interrogate
+          - warning
+          - statement
+          - process_start
+          - negotiat
+        execute:
+          - attack
+          - hostile
+          - strike
+          - bomb
+          - assault
+          - conduct
+          - perform
+          - raiding
+          - raid
+          - shoot
+          - shell
+          - fire
+          - engage
+          - execute
+          - ambush
+          - threaten
+          - hijack
+          - disrupt
+          - extort
+          - seize
+          - abduct
+          - capture
+          - arrest
+          - detain
+          - invade
+          - deploy
+          - organize
+          - fight
+          - cyber
+          - infiltrate
+        cashout:
+          - release
+          - free
+          - withdraw
+          - return
+          - surrender
+          - cease
+          - ceasefire
+          - cease_fire
+          - negotiate
+          - settle
+          - resolve
+          - conclude
+          - resign
+          - acquit
+          - discharge
+          - pardoned
+          - paroled
+          - death
+          - die
+          - killed
+          - injury
+          - hurt
+          - injured
