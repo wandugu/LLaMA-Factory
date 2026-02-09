@@ -70,6 +70,132 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
+def _load_mapping(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        LOGGER.debug("Mapping file not found: %s", path)
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        LOGGER.warning("Mapping file %s parse error: %s", path, exc)
+        return {}
+    if not isinstance(payload, dict):
+        LOGGER.warning("Mapping file %s is not a dict", path)
+        return {}
+    return payload
+
+
+def _normalize_stages(raw: Any) -> List[str]:
+    stages: List[str] = []
+    if isinstance(raw, str) and raw.strip():
+        stages.append(raw.strip().upper())
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                stages.append(item.strip().upper())
+    return stages
+
+
+def _infer_fallback_stages(
+    event_type: str,
+    fallback_cfg: Dict[str, Any],
+    stage_order: List[str],
+) -> List[str]:
+    keywords_cfg = fallback_cfg.get("keywords", {}) if isinstance(fallback_cfg, dict) else {}
+    prep_keywords = keywords_cfg.get("prep", [])
+    probe_keywords = keywords_cfg.get("probe", [])
+    execute_keywords = keywords_cfg.get("execute", [])
+    cashout_keywords = keywords_cfg.get("cashout", [])
+    default_stage = str(fallback_cfg.get("default_stage", "PREP")).upper()
+
+    event_type_lower = (event_type or "").lower()
+    hits: List[str] = []
+    if any(keyword in event_type_lower for keyword in execute_keywords):
+        hits.append("EXECUTE")
+    if any(keyword in event_type_lower for keyword in cashout_keywords):
+        hits.append("CASHOUT")
+    if any(keyword in event_type_lower for keyword in probe_keywords):
+        hits.insert(0, "PROBE")
+    if any(keyword in event_type_lower for keyword in prep_keywords):
+        if "PROBE" not in hits:
+            hits.insert(0, "PROBE")
+        if "PREP" not in hits:
+            hits.insert(0, "PREP")
+    if not hits:
+        hits = [default_stage]
+    ordered_hits: List[str] = []
+    for stage in stage_order:
+        if stage in hits and stage not in ordered_hits:
+            ordered_hits.append(stage)
+    return ordered_hits or hits
+
+
+def _stage_mapping_stats(
+    events: List[Dict[str, Any]],
+    mapping: Dict[str, Any],
+    stage_order: List[str],
+    fallback_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    raw_types_by_stage: Dict[str, set[str]] = {stage: set() for stage in stage_order}
+    for raw_type, stage_list in mapping.items():
+        stages = _normalize_stages(stage_list)
+        for stage in stage_order:
+            if stage in stages:
+                raw_types_by_stage[stage].add(str(raw_type))
+
+    event_inst_counts: Counter[str] = Counter()
+    fallback_inst_counts: Counter[str] = Counter()
+    fallback_event_count = 0
+    total_event_count = 0
+    total_instantiations = 0
+
+    for item in events:
+        trigger = item.get("trigger") or {}
+        raw_type = trigger.get("type") if isinstance(trigger, dict) else None
+        if not raw_type:
+            continue
+        total_event_count += 1
+        if raw_type in mapping:
+            stages = _normalize_stages(mapping.get(raw_type))
+        else:
+            stages = _infer_fallback_stages(str(raw_type), fallback_cfg, stage_order)
+            fallback_event_count += 1
+        for stage in stages:
+            stage_upper = stage.upper()
+            event_inst_counts[stage_upper] += 1
+            if raw_type not in mapping:
+                fallback_inst_counts[stage_upper] += 1
+        total_instantiations += len(stages)
+
+    stage_rows: Dict[str, Dict[str, Any]] = {}
+    for stage in stage_order:
+        inst_count = event_inst_counts.get(stage, 0)
+        fallback_inst = fallback_inst_counts.get(stage, 0)
+        stage_rows[stage] = {
+            "raw_types": len(raw_types_by_stage.get(stage, set())),
+            "events": inst_count,
+            "events_pct": round((inst_count / total_instantiations * 100), 2) if total_instantiations else 0.0,
+            "fallback_pct": round((fallback_inst / inst_count * 100), 2) if inst_count else 0.0,
+        }
+
+    total_raw_types = len(mapping)
+    total_fallback_pct = round((fallback_event_count / total_event_count * 100), 2) if total_event_count else 0.0
+    return {
+        "stages": stage_rows,
+        "total": {
+            "raw_types": total_raw_types,
+            "events": total_instantiations,
+            "events_pct": 100.0 if total_instantiations else 0.0,
+            "fallback_pct": total_fallback_pct,
+        },
+        "events": {
+            "total_events": total_event_count,
+            "fallback_events": fallback_event_count,
+            "total_instantiations": total_instantiations,
+        },
+    }
+
+
 def _length_stats(values: Iterable[int]) -> Dict[str, float]:
     values_list = [v for v in values if v is not None]
     if not values_list:
@@ -562,6 +688,36 @@ def _ensure_sample_dataset(root: Path, cfg: Dict[str, Any], processed_files: Dic
     return sample_paths
 
 
+def _load_events_for_stage_mapping(
+    root: Path,
+    stats_cfg: Dict[str, Any],
+    processed_dir: Path,
+    processed_files: Dict[str, str],
+    auto_sample: bool,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    events: List[Dict[str, Any]] = []
+    used_sample = False
+    event_filename = processed_files.get("event")
+    if not event_filename:
+        LOGGER.debug("No event file configured for stage mapping.")
+        return events, used_sample
+    event_path = processed_dir / event_filename
+    if event_path.exists():
+        events = _read_jsonl(event_path)
+        return events, used_sample
+
+    LOGGER.debug("Stage mapping event file missing: %s", event_path)
+    if not auto_sample:
+        return events, used_sample
+
+    sample_paths = _ensure_sample_dataset(root, stats_cfg, processed_files)
+    sample_event_path = sample_paths.get("event")
+    if sample_event_path and sample_event_path.exists():
+        events = _read_jsonl(sample_event_path)
+        used_sample = True
+    return events, used_sample
+
+
 def _collect_examples(
     available: Dict[str, List[Dict[str, Any]]],
     ordered_files: List[str],
@@ -664,6 +820,65 @@ def main() -> None:
     }
     if schema_paths:
         summary["schemas"] = schema_paths
+
+    stage_mapping_cfg = stats_cfg.get("stage_mapping", {}) if isinstance(stats_cfg.get("stage_mapping", {}), dict) else {}
+    if stage_mapping_cfg.get("enabled", False):
+        mapping_file = stage_mapping_cfg.get("mapping_file")
+        if mapping_file:
+            mapping_path = _resolve_path(root, mapping_file)
+            mapping_payload = _load_mapping(mapping_path)
+            stage_order = [str(stage).upper() for stage in stage_mapping_cfg.get("stage_order", []) if stage]
+            fallback_cfg = stage_mapping_cfg.get("fallback", {}) if isinstance(stage_mapping_cfg.get("fallback", {}), dict) else {}
+            dataset_entries = stage_mapping_cfg.get("datasets", [])
+            if not stage_order:
+                LOGGER.warning("Stage mapping stage_order is empty, skip.")
+            elif not dataset_entries:
+                LOGGER.warning("Stage mapping datasets is empty, skip.")
+            else:
+                stage_mapping_summary: Dict[str, Any] = {}
+                used_sample_stage_mapping = False
+                for entry in dataset_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    mode_key = entry.get("mode")
+                    if not mode_key:
+                        continue
+                    mode_cfg = config.get("data", {}).get("modes", {}).get(mode_key, {})
+                    if not isinstance(mode_cfg, dict):
+                        continue
+                    dataset_label = entry.get("label") or mode_cfg.get("label") or mode_key
+                    processed_dir = _resolve_path(root, mode_cfg.get("processed_dir", stats_cfg["dataset_dir"]))
+                    processed_files_mode = mode_cfg.get("processed_files", {})
+                    if not isinstance(processed_files_mode, dict):
+                        LOGGER.debug("Mode %s processed_files missing", mode_key)
+                        continue
+                    events, used_sample_mode = _load_events_for_stage_mapping(
+                        root,
+                        stats_cfg,
+                        processed_dir,
+                        processed_files_mode,
+                        auto_sample=auto_sample,
+                    )
+                    used_sample_stage_mapping = used_sample_stage_mapping or used_sample_mode
+                    LOGGER.debug(
+                        "Stage mapping dataset %s: events=%d, mapping=%s",
+                        dataset_label,
+                        len(events),
+                        mapping_path,
+                    )
+                    stage_mapping_summary[dataset_label] = _stage_mapping_stats(
+                        events,
+                        mapping_payload,
+                        stage_order,
+                        fallback_cfg,
+                    )
+                summary["stage_mapping"] = {
+                    "mapping_file": str(mapping_path),
+                    "used_sample": used_sample_stage_mapping,
+                    "datasets": stage_mapping_summary,
+                }
+        else:
+            LOGGER.warning("Stage mapping enabled but mapping_file not configured.")
 
     for name, handler in (
         (processed_files.get("traj"), _trajectory_stats),
